@@ -23,7 +23,8 @@ tasks.test {
 
 tasks.named<ShadowJar>("shadowJar") {
     archiveBaseName.set("OpenRTM")
-    archiveClassifier.set("all")
+    archiveVersion.set("")
+    archiveClassifier.set("")
     mergeServiceFiles()
     manifest {
         attributes["Main-Class"] = application.mainClass.get()
