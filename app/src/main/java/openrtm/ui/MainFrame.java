@@ -99,7 +99,7 @@ public final class MainFrame extends JFrame {
             @Override
             public void windowClosed(java.awt.event.WindowEvent e) {
                 stopReconnect();
-                service.cancelUpload();
+                service.cancelFileTransfer();
                 service.disconnect();
                 executor.shutdownNow();
                 reconnectExecutor.shutdownNow();
@@ -119,7 +119,7 @@ public final class MainFrame extends JFrame {
         connect.addActionListener(e -> connect());
         disconnect.addActionListener(e -> runTask("disconnect", () -> {
             stopReconnect();
-            service.cancelUpload();
+            service.cancelFileTransfer();
             service.disconnect();
             SwingUtilities.invokeLater(() -> setStatus("Disconnected", WARN));
         }));
@@ -301,7 +301,7 @@ public final class MainFrame extends JFrame {
 
     private void reconnectTick() {
         if (!reconnectWanted) return;
-        if (service.isUploadInProgress()) {
+        if (service.isFileTransferInProgress()) {
             scheduleReconnectCheck(nextReconnectDelay());
             return;
         }

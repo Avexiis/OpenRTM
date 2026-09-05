@@ -53,9 +53,10 @@ public final class FileBrowserPanel extends JPanel {
     private final JTree remoteTree = new JTree(remoteModel);
     private final JLabel localPath = new JLabel(" ");
     private final JLabel remotePath = new JLabel(" ");
-    private final JProgressBar uploadProgress = new JProgressBar(0, 100);
-    private final JLabel uploadStatus = new JLabel(" ");
-    private final JButton cancelUpload = button("Cancel Upload");
+    private final JProgressBar transferProgress = new JProgressBar(0, 100);
+    private final JLabel transferStatus = new JLabel(" ");
+    private final JButton cancelTransfer = button("Cancel Transfer");
+    private boolean transferActive;
 
     public FileBrowserPanel(ConsoleService service, TaskRunner tasks) {
         super(new BorderLayout(10, 10));
@@ -92,12 +93,12 @@ public final class FileBrowserPanel extends JPanel {
 
         refreshLocal.addActionListener(e -> refreshSelectedLocal());
         refreshRemote.addActionListener(e -> refreshSelectedRemote());
-        upload.addActionListener(e -> uploadSelectedFile());
-        download.addActionListener(e -> downloadSelectedFile());
+        upload.addActionListener(e -> uploadSelected());
+        download.addActionListener(e -> downloadSelected());
         newFolder.addActionListener(e -> createRemoteFolder());
         delete.addActionListener(e -> deleteSelectedRemote());
-        cancelUpload.addActionListener(e -> service.cancelUpload());
-        cancelUpload.setEnabled(false);
+        cancelTransfer.addActionListener(e -> service.cancelFileTransfer());
+        cancelTransfer.setEnabled(false);
 
         actions.add(refreshLocal);
         actions.add(refreshRemote);
@@ -105,13 +106,13 @@ public final class FileBrowserPanel extends JPanel {
         actions.add(download);
         actions.add(newFolder);
         actions.add(delete);
-        actions.add(cancelUpload);
+        actions.add(cancelTransfer);
 
-        uploadProgress.setStringPainted(true);
-        uploadProgress.setVisible(false);
+        transferProgress.setStringPainted(true);
+        transferProgress.setVisible(false);
         JPanel progress = new JPanel(new BorderLayout(8, 0));
-        progress.add(uploadStatus, BorderLayout.CENTER);
-        progress.add(uploadProgress, BorderLayout.EAST);
+        progress.add(transferStatus, BorderLayout.CENTER);
+        progress.add(transferProgress, BorderLayout.EAST);
 
         panel.add(actions, BorderLayout.NORTH);
         panel.add(progress, BorderLayout.SOUTH);
@@ -290,11 +291,15 @@ public final class FileBrowserPanel extends JPanel {
         model.reload(parent);
     }
 
-    private void uploadSelectedFile() {
+    private void uploadSelected() {
+        if (transferActive) {
+            showSelectionError("A file transfer is already running");
+            return;
+        }
         DefaultMutableTreeNode localNode = selectedNode(localTree);
         BrowserNode localEntry = browserNode(localNode);
-        if (localEntry == null || !localEntry.localEntry() || localEntry.directory()) {
-            showSelectionError("Select a local file");
+        if (localEntry == null || !localEntry.localEntry()) {
+            showSelectionError("Select a local file or folder");
             return;
         }
 
@@ -305,39 +310,58 @@ public final class FileBrowserPanel extends JPanel {
             return;
         }
 
-        String remoteFilePath = childRemotePath(ensureRemoteDirectory(remoteDirectory.remotePath()), localEntry.localPath().getFileName().toString());
-        cancelUpload.setEnabled(true);
-        uploadProgress.setValue(0);
-        uploadProgress.setVisible(true);
-        uploadStatus.setText("Preparing upload");
-        tasks.run("upload file", () -> {
+        Path localName = localEntry.localPath().getFileName();
+        if (localName == null) {
+            showSelectionError("Filesystem roots cannot be uploaded as folders");
+            return;
+        }
+
+        String remotePath = childRemotePath(ensureRemoteDirectory(remoteDirectory.remotePath()), localName.toString());
+        String label = localEntry.directory() ? "upload folder" : "upload file";
+        beginTransfer("Preparing " + label);
+        tasks.run(label, () -> {
             try {
-                service.uploadFile(localEntry.localPath(), remoteFilePath, this::updateUploadProgress);
+                if (localEntry.directory()) {
+                    service.uploadDirectory(localEntry.localPath(), remotePath, this::updateTransferProgress);
+                } else {
+                    service.uploadFile(localEntry.localPath(), remotePath, this::updateTransferProgress);
+                }
                 List<DefaultMutableTreeNode> children = remoteChildren(remoteDirectory);
                 SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, remoteDirectoryNode, remoteDirectory, children));
             } finally {
-                SwingUtilities.invokeLater(() -> {
-                    cancelUpload.setEnabled(false);
-                    uploadProgress.setVisible(false);
-                });
+                SwingUtilities.invokeLater(this::finishTransfer);
             }
         });
     }
 
-    private void updateUploadProgress(long completed, long total, String message) {
+    private void updateTransferProgress(long completed, long total, String message) {
         SwingUtilities.invokeLater(() -> {
-            int percent = total <= 0 ? 100 : (int) Math.min(100, Math.round((completed * 100.0) / total));
-            uploadProgress.setValue(percent);
-            uploadProgress.setString(percent + "%");
-            uploadStatus.setText(message);
+            boolean enumerating = total < 0;
+            transferProgress.setIndeterminate(enumerating);
+            if (enumerating) {
+                transferProgress.setString("");
+            } else {
+                int percent = total == 0 ? 100 : (int) Math.min(100, Math.round((completed * 100.0) / total));
+                transferProgress.setValue(percent);
+                transferProgress.setString(percent + "%");
+            }
+            transferStatus.setText(message);
         });
     }
 
-    private void downloadSelectedFile() {
+    private void downloadSelected() {
+        if (transferActive) {
+            showSelectionError("A file transfer is already running");
+            return;
+        }
         DefaultMutableTreeNode remoteNode = selectedNode(remoteTree);
         BrowserNode remoteEntry = browserNode(remoteNode);
-        if (remoteEntry == null || !remoteEntry.remoteEntry() || remoteEntry.directory()) {
-            showSelectionError("Select a console file");
+        if (remoteEntry == null || !remoteEntry.remoteEntry()) {
+            showSelectionError("Select a console file or folder");
+            return;
+        }
+        if (remoteEntry.directory() && parentNode(remoteNode) == remoteRoot) {
+            showSelectionError("Select a folder inside a console drive");
             return;
         }
 
@@ -351,11 +375,39 @@ public final class FileBrowserPanel extends JPanel {
         Path destination = localDirectory.localPath().resolve(displayRemoteName(remoteEntry.remotePath()));
         if (!confirmOverwrite(destination)) return;
 
-        tasks.run("download file", () -> {
-            service.downloadFile(remoteEntry.remotePath(), destination);
-            List<DefaultMutableTreeNode> children = localChildren(localDirectory.localPath());
-            SwingUtilities.invokeLater(() -> replaceChildren(localModel, localDirectoryNode, localDirectory, children));
+        String label = remoteEntry.directory() ? "download folder" : "download file";
+        beginTransfer("Preparing " + label);
+        tasks.run(label, () -> {
+            try {
+                if (remoteEntry.directory()) {
+                    service.downloadDirectory(remoteEntry.remotePath(), destination, this::updateTransferProgress);
+                } else {
+                    service.downloadFile(remoteEntry.remotePath(), destination, this::updateTransferProgress);
+                }
+                List<DefaultMutableTreeNode> children = localChildren(localDirectory.localPath());
+                SwingUtilities.invokeLater(() -> replaceChildren(localModel, localDirectoryNode, localDirectory, children));
+            } finally {
+                SwingUtilities.invokeLater(this::finishTransfer);
+            }
         });
+    }
+
+    private void beginTransfer(String message) {
+        transferActive = true;
+        cancelTransfer.setEnabled(true);
+        transferProgress.setIndeterminate(false);
+        transferProgress.setValue(0);
+        transferProgress.setString("0%");
+        transferProgress.setVisible(true);
+        transferStatus.setText(message);
+    }
+
+    private void finishTransfer() {
+        transferActive = false;
+        cancelTransfer.setEnabled(false);
+        transferProgress.setIndeterminate(false);
+        transferProgress.setVisible(false);
+        transferStatus.setText(" ");
     }
 
     private void createRemoteFolder() {

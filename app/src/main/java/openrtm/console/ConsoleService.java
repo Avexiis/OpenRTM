@@ -20,13 +20,14 @@ import java.util.regex.Pattern;
 
 public final class ConsoleService {
     private static final long XAM_GAMERTAG_ADDRESS = 0x81AA28FCL;
+    private static final long[] TRANSFER_RETRY_DELAYS_MS = {2_000, 3_500, 5_000, 4_000, 6_500};
 
     private final AppSettings settings = new AppSettings();
     private JRPC.IXboxConsole console;
     private volatile JRPC.XbdmXboxConsole xbdmConsole;
     private String currentHost = "";
-    private volatile boolean uploadInProgress;
-    private volatile boolean uploadCancelled;
+    private volatile boolean fileTransferInProgress;
+    private volatile boolean fileTransferCancelled;
 
     public synchronized String savedHost() {
         return settings.lastHost().orElse("");
@@ -200,27 +201,111 @@ public final class ConsoleService {
 
     public synchronized void uploadFile(Path localPath, String remotePath, TransferProgress progress) throws IOException {
         if (!Files.isRegularFile(localPath)) throw new IOException("Local file does not exist: " + localPath);
-        uploadCancelled = false;
-        uploadInProgress = true;
+        beginFileTransfer();
         try {
-            ResumableUploader.upload(localPath, remotePath, remoteFile(), () -> uploadCancelled, progress::update);
+            uploadFileWithinTransfer(localPath, remotePath, 0, Files.size(localPath), progress);
         } finally {
-            uploadInProgress = false;
+            endFileTransfer();
         }
     }
 
+    public synchronized void uploadDirectory(Path localDirectory, String remoteDirectory,
+                                             TransferProgress progress) throws IOException {
+        beginFileTransfer();
+        try {
+            LocalUploadPlan.Plan plan = LocalUploadPlan.build(
+                    localDirectory, remoteDirectory, () -> fileTransferCancelled);
+            long completed = 0;
+            progress.update(0, plan.totalBytes(), "Preparing folder upload");
+            for (LocalUploadPlan.Entry entry : plan.entries()) {
+                checkFileTransferCancelled();
+                if (entry.directory()) {
+                    retryRemote(() -> {
+                        makeDirectory(entry.remotePath());
+                        return null;
+                    }, completed, plan.totalBytes(), progress);
+                    progress.update(completed, plan.totalBytes(), "Created " + entry.remotePath());
+                    continue;
+                }
+
+                long base = completed;
+                uploadFileWithinTransfer(entry.localPath(), entry.remotePath(), base, plan.totalBytes(), progress);
+                completed = saturatingAdd(completed, entry.size());
+            }
+            progress.update(plan.totalBytes(), plan.totalBytes(), "Folder upload complete");
+        } finally {
+            endFileTransfer();
+        }
+    }
+
+    public synchronized void uploadDirectory(Path localDirectory, String remoteDirectory) throws IOException {
+        uploadDirectory(localDirectory, remoteDirectory, (completed, total, message) -> {
+        });
+    }
+
     public boolean isUploadInProgress() {
-        return uploadInProgress;
+        return fileTransferInProgress;
     }
 
     public void cancelUpload() {
-        uploadCancelled = true;
+        cancelFileTransfer();
+    }
+
+    public boolean isFileTransferInProgress() {
+        return fileTransferInProgress;
+    }
+
+    public void cancelFileTransfer() {
+        fileTransferCancelled = true;
         JRPC.XbdmXboxConsole active = xbdmConsole;
-        if (uploadInProgress && active != null) active.Abort();
+        if (fileTransferInProgress && active != null) active.Abort();
     }
 
     public synchronized void downloadFile(String remotePath, Path localPath) throws IOException {
-        requireXbdm().ReceiveFile(remotePath, localPath);
+        downloadFile(remotePath, localPath, (completed, total, message) -> {
+        });
+    }
+
+    public synchronized void downloadFile(String remotePath, Path localPath, TransferProgress progress) throws IOException {
+        beginFileTransfer();
+        try {
+            progress.update(0, -1, "Inspecting console file");
+            long size = retryRemote(() -> remoteFileSize(remotePath), 0, -1, progress);
+            if (size < 0) throw new IOException("Console file does not exist: " + remotePath);
+            downloadFileWithinTransfer(remotePath, localPath, 0, size, size, progress);
+            progress.update(size, size, "Download complete");
+        } finally {
+            endFileTransfer();
+        }
+    }
+
+    public synchronized void downloadDirectory(String remoteDirectory, Path localDirectory,
+                                               TransferProgress progress) throws IOException {
+        beginFileTransfer();
+        try {
+            progress.update(0, -1, "Enumerating console folder");
+            List<RemoteDownload> files = new ArrayList<>();
+            collectRemoteDirectory(remoteDirectory, localDirectory, files, progress);
+
+            long total = 0;
+            for (RemoteDownload file : files) total = saturatingAdd(total, file.size());
+            long completed = 0;
+            progress.update(0, total, "Downloading folder");
+            for (RemoteDownload file : files) {
+                checkFileTransferCancelled();
+                long base = completed;
+                downloadFileWithinTransfer(file.remotePath(), file.localPath(), base, total, file.size(), progress);
+                completed = saturatingAdd(completed, file.size());
+            }
+            progress.update(total, total, "Folder download complete");
+        } finally {
+            endFileTransfer();
+        }
+    }
+
+    public synchronized void downloadDirectory(String remoteDirectory, Path localDirectory) throws IOException {
+        downloadDirectory(remoteDirectory, localDirectory, (completed, total, message) -> {
+        });
     }
 
     public synchronized byte[] readFilePartial(String remotePath, long offset, int length) throws IOException {
@@ -248,11 +333,133 @@ public final class ConsoleService {
     }
 
     public synchronized void makeDirectory(String remotePath) {
-        rawCommand("mkdir name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath));
+        String response = rawCommand("mkdir name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath));
+        try {
+            throwIfXbdmError(response, "mkdir");
+        } catch (RuntimeException createFailure) {
+            try {
+                listDirectory(LocalUploadPlan.ensureRemoteDirectory(remotePath));
+            } catch (RuntimeException missingDirectory) {
+                createFailure.addSuppressed(missingDirectory);
+                throw createFailure;
+            }
+        }
     }
 
     public synchronized void deletePath(String remotePath, boolean directory) {
         rawCommand("delete name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath) + (directory ? " dir" : ""));
+    }
+
+    private void uploadFileWithinTransfer(Path localPath, String remotePath, long base,
+                                          long total, TransferProgress progress) throws IOException {
+        String name = localPath.getFileName() == null ? localPath.toString() : localPath.getFileName().toString();
+        ResumableUploader.upload(localPath, remotePath, remoteFile(), () -> fileTransferCancelled,
+                (completed, ignored, message) -> progress.update(saturatingAdd(base, completed), total, name + ": " + message));
+    }
+
+    private void downloadFileWithinTransfer(String remotePath, Path localPath, long base,
+                                            long total, long expectedSize, TransferProgress progress) throws IOException {
+        checkFileTransferCancelled();
+        String name = LocalUploadPlan.remoteLeaf(remotePath);
+        retryRemote(() -> {
+            requireXbdm().ReceiveFile(remotePath, localPath,
+                    completed -> progress.update(saturatingAdd(base, completed), total, "Downloading " + name));
+            return null;
+        }, base, total, progress);
+        long actualSize = Files.size(localPath);
+        if (actualSize != expectedSize) {
+            throw new IOException("Downloaded size mismatch for " + name + ": expected " + expectedSize + ", got " + actualSize);
+        }
+    }
+
+    private void collectRemoteDirectory(String remoteDirectory, Path localDirectory,
+                                        List<RemoteDownload> files, TransferProgress progress) throws IOException {
+        checkFileTransferCancelled();
+        Files.createDirectories(localDirectory);
+        String parent = LocalUploadPlan.ensureRemoteDirectory(remoteDirectory);
+        List<FileEntry> entries = retryRemote(() -> listDirectory(parent), 0, -1, progress);
+        for (FileEntry entry : entries) {
+            checkFileTransferCancelled();
+            String name = safeRemoteLeaf(entry.name());
+            String remoteChild = LocalUploadPlan.childRemotePath(parent, name);
+            Path localChild = localDirectory.resolve(name).normalize();
+            if (!localChild.startsWith(localDirectory.normalize())) {
+                throw new IOException("Unsafe console path: " + entry.name());
+            }
+            if (entry.directory()) {
+                collectRemoteDirectory(remoteChild, localChild, files, progress);
+            } else {
+                files.add(new RemoteDownload(remoteChild, localChild, entry.size()));
+            }
+        }
+    }
+
+    private static String safeRemoteLeaf(String path) throws IOException {
+        String name = LocalUploadPlan.remoteLeaf(path);
+        if (name.isBlank() || name.equals(".") || name.equals("..") || name.indexOf('\0') >= 0) {
+            throw new IOException("Unsafe console path: " + path);
+        }
+        return name;
+    }
+
+    private void beginFileTransfer() {
+        if (fileTransferInProgress) throw new IllegalStateException("Another file transfer is already running");
+        fileTransferCancelled = false;
+        fileTransferInProgress = true;
+    }
+
+    private void endFileTransfer() {
+        fileTransferInProgress = false;
+    }
+
+    private void checkFileTransferCancelled() throws IOException {
+        if (fileTransferCancelled || Thread.currentThread().isInterrupted()) {
+            throw new IOException("File transfer cancelled");
+        }
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (right > Long.MAX_VALUE - left) return Long.MAX_VALUE;
+        return left + right;
+    }
+
+    private <T> T retryRemote(RemoteSupplier<T> operation, long completed, long total,
+                              TransferProgress progress) throws IOException {
+        int attempt = 0;
+        while (true) {
+            checkFileTransferCancelled();
+            try {
+                return operation.get();
+            } catch (Exception failure) {
+                if (!isRetryableRemoteFailure(failure)) {
+                    String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+                    throw new IOException(message, failure);
+                }
+            }
+
+            long delay = TRANSFER_RETRY_DELAYS_MS[attempt++ % TRANSFER_RETRY_DELAYS_MS.length];
+            progress.update(completed, total, "Connection lost; retrying in " + (delay / 1_000.0) + " seconds");
+            waitForTransferRetry(delay);
+            try {
+                if (reconnect()) progress.update(completed, total, "Reconnected to console");
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    private void waitForTransferRetry(long delay) throws IOException {
+        long remaining = delay;
+        while (remaining > 0) {
+            checkFileTransferCancelled();
+            long slice = Math.min(remaining, 250);
+            try {
+                Thread.sleep(slice);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("File transfer cancelled", interrupted);
+            }
+            remaining -= slice;
+        }
     }
 
     private ResumableUploader.RemoteFile remoteFile() {
@@ -317,15 +524,20 @@ public final class ConsoleService {
 
     private static ResumableUploader.RemoteException remoteFailure(Exception failure) {
         String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+        return new ResumableUploader.RemoteException(isRetryableRemoteFailure(failure), message, failure);
+    }
+
+    private static boolean isRetryableRemoteFailure(Exception failure) {
+        String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
         String lower = message.toLowerCase(Locale.ROOT);
-        boolean retryable = failure instanceof IOException
+        if (failure instanceof java.nio.file.FileSystemException) return false;
+        return failure instanceof IOException
                 || lower.contains("i/o")
                 || lower.contains("connect")
                 || lower.contains("closed")
                 || lower.contains("eof")
                 || lower.contains("timed out")
                 || lower.contains("completion failed");
-        return new ResumableUploader.RemoteException(retryable, message, failure);
     }
 
     private JRPC.IXboxConsole requireConsole() {
@@ -427,6 +639,9 @@ public final class ConsoleService {
     }
 
     public record FileEntry(String name, long size, boolean directory, String raw) {
+    }
+
+    private record RemoteDownload(String remotePath, Path localPath, long size) {
     }
 
     @FunctionalInterface

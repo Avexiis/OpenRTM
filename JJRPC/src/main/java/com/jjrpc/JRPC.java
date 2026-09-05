@@ -12,6 +12,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.Socket;
+import java.util.function.LongConsumer;
 
 public final class JRPC {
     /**Util*/
@@ -239,6 +240,11 @@ public final class JRPC {
         }
 
         public synchronized void ReceiveFile(String remotePath, Path localPath) throws IOException {
+            ReceiveFile(remotePath, localPath, ignored -> {
+            });
+        }
+
+        public synchronized void ReceiveFile(String remotePath, Path localPath, LongConsumer progress) throws IOException {
             ensureConnected();
             int previousTimeout = useSocketTimeout(transferTimeout());
             try {
@@ -266,6 +272,7 @@ public final class JRPC {
                         }
                         out.write(buf, 0, chunk);
                         remaining -= chunk;
+                        progress.accept(length - remaining);
                     }
                 }
             } catch (IOException e) {
