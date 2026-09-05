@@ -156,6 +156,7 @@ public final class JRPC {
                 writeLine(command);
                 String first = readAsciiLine();
                 String lower = first.toLowerCase(Locale.ROOT);
+                int status = statusCode(first);
                 if (lower.contains("binary")) {
                     String lenLine = readAsciiLine().trim();
                     int n = Integer.parseInt(lenLine);
@@ -164,7 +165,7 @@ public final class JRPC {
                     outResponse[0] = "200- data=" + toHex(data);
                     return;
                 }
-                if (lower.contains("response follows") || lower.contains("data follows")) {
+                if (status == 202 || lower.contains("response follows") || lower.contains("data follows")) {
                     StringBuilder sb = new StringBuilder(first);
                     while (true) {
                         String line = readAsciiLine();
@@ -205,6 +206,11 @@ public final class JRPC {
         }
 
         public synchronized void SendFile(Path localPath, String remotePath) throws IOException {
+            SendFile(localPath, remotePath, ignored -> {
+            });
+        }
+
+        public synchronized void SendFile(Path localPath, String remotePath, LongConsumer progress) throws IOException {
             ensureConnected();
             int previousTimeout = useSocketTimeout(transferTimeout());
             long total = Files.size(localPath);
@@ -217,8 +223,13 @@ public final class JRPC {
                 try (InputStream in = Files.newInputStream(localPath)) {
                     byte[] buf = new byte[64 * 1024];
                     int read;
+                    long sent = 0;
                     while ((read = in.read(buf)) >= 0) {
-                        if (read > 0) bout.write(buf, 0, read);
+                        if (read > 0) {
+                            bout.write(buf, 0, read);
+                            sent += read;
+                            progress.accept(sent);
+                        }
                     }
                     bout.flush();
                 }
@@ -230,6 +241,7 @@ public final class JRPC {
                     }
                 } catch (SocketTimeoutException timeoutAfterPayload) {
                     closeQuietly();
+                    throw timeoutAfterPayload;
                 }
             } catch (IOException e) {
                 closeQuietly();
@@ -255,8 +267,7 @@ public final class JRPC {
                 }
 
                 byte[] hdr = readN(4);
-                long length = (hdr[0] & 0xFFL) | ((hdr[1] & 0xFFL) << 8)
-                        | ((hdr[2] & 0xFFL) << 16) | ((hdr[3] & 0xFFL) << 24);
+                long length = readUnsignedIntLittleEndian(hdr);
                 Path parent = localPath.getParent();
                 if (parent != null) Files.createDirectories(parent);
                 try (OutputStream out = Files.newOutputStream(localPath)) {
@@ -283,6 +294,50 @@ public final class JRPC {
             }
         }
 
+        public synchronized boolean FileMatches(Path localPath, String remotePath, LongConsumer progress) throws IOException {
+            ensureConnected();
+            int previousTimeout = useSocketTimeout(transferTimeout());
+            try {
+                writeLine("getfile name=" + quoteXbdm(remotePath));
+                String first = readAsciiLine();
+                if (statusCode(first) != 203) {
+                    throw new ComException(UIntToInt(0x82DA0007L), "getfile failed: " + first);
+                }
+
+                long remoteLength = readUnsignedIntLittleEndian(readN(4));
+                long localLength = Files.size(localPath);
+                if (remoteLength != localLength) {
+                    closeQuietly();
+                    return false;
+                }
+
+                boolean matches = true;
+                long compared = 0;
+                try (InputStream local = Files.newInputStream(localPath)) {
+                    byte[] localBuffer = new byte[64 * 1024];
+                    byte[] remoteBuffer = new byte[64 * 1024];
+                    long remaining = remoteLength;
+                    while (remaining > 0) {
+                        int chunk = (int) Math.min(remoteBuffer.length, remaining);
+                        readFully(bin, remoteBuffer, chunk, "console file");
+                        readFully(local, localBuffer, chunk, "local file");
+                        for (int i = 0; i < chunk; i++) {
+                            if (localBuffer[i] != remoteBuffer[i]) matches = false;
+                        }
+                        remaining -= chunk;
+                        compared += chunk;
+                        progress.accept(compared);
+                    }
+                }
+                return matches;
+            } catch (IOException e) {
+                closeQuietly();
+                throw e;
+            } finally {
+                restoreSocketTimeout(previousTimeout);
+            }
+        }
+
         public synchronized byte[] ReadFilePartial(String remotePath, long offset, int length) throws IOException {
             ensureConnected();
             int previousTimeout = useSocketTimeout(transferTimeout());
@@ -293,8 +348,7 @@ public final class JRPC {
                     throw new ComException(UIntToInt(0x82DA0007L), "partial getfile failed: " + first);
                 }
                 byte[] hdr = readN(4);
-                long n = (hdr[0] & 0xFFL) | ((hdr[1] & 0xFFL) << 8)
-                        | ((hdr[2] & 0xFFL) << 16) | ((hdr[3] & 0xFFL) << 24);
+                long n = readUnsignedIntLittleEndian(hdr);
                 if (n > length) throw new IOException("Console returned more data than requested");
                 return readN((int) n);
             } catch (IOException e) {
@@ -364,6 +418,8 @@ public final class JRPC {
             if (sock != null && sock.isConnected() && !sock.isClosed()) return;
             try {
                 sock = new Socket();
+                sock.setTcpNoDelay(true);
+                sock.setKeepAlive(true);
                 sock.connect(new InetSocketAddress(host, port), connectTimeout);
                 sock.setSoTimeout(conversationTimeout);
                 bin = new BufferedInputStream(sock.getInputStream());
@@ -417,6 +473,22 @@ public final class JRPC {
                 off += r;
             }
             return buf;
+        }
+
+        private static void readFully(InputStream input, byte[] buffer, int length, String source) throws IOException {
+            int offset = 0;
+            while (offset < length) {
+                int read = input.read(buffer, offset, length - offset);
+                if (read < 0) throw new EOFException("Unexpected EOF reading " + source);
+                offset += read;
+            }
+        }
+
+        private static long readUnsignedIntLittleEndian(byte[] value) {
+            return (value[0] & 0xFFL)
+                    | ((value[1] & 0xFFL) << 8)
+                    | ((value[2] & 0xFFL) << 16)
+                    | ((value[3] & 0xFFL) << 24);
         }
 
         private static String toHex(byte[] b) {

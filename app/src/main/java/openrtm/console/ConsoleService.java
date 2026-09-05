@@ -6,6 +6,10 @@ import openrtm.config.AppSettings;
 import openrtm.util.HexUtils;
 
 import java.io.IOException;
+import java.io.EOFException;
+import java.net.ConnectException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +32,7 @@ public final class ConsoleService {
     private String currentHost = "";
     private volatile boolean fileTransferInProgress;
     private volatile boolean fileTransferCancelled;
+    private Boolean partialFileIoSupported;
 
     public synchronized String savedHost() {
         return settings.lastHost().orElse("");
@@ -52,6 +57,7 @@ public final class ConsoleService {
     public synchronized boolean connect(String host) {
         String target = host == null ? "" : host.trim();
         if (target.isBlank()) throw new IllegalArgumentException("Enter a console host or IP address");
+        boolean hostChanged = !target.equalsIgnoreCase(currentHost);
         closeConsole();
         JRPC.IXboxConsole[] out = new JRPC.IXboxConsole[1];
         boolean ok = JRPC.Connect(null, out, target);
@@ -59,6 +65,7 @@ public final class ConsoleService {
         console = out[0];
         xbdmConsole = console instanceof JRPC.XbdmXboxConsole xbdm ? xbdm : null;
         if (xbdmConsole != null) xbdmConsole.setConversationTimeout(15_000);
+        if (hostChanged) partialFileIoSupported = null;
         currentHost = target;
         settings.rememberHost(target);
         try {
@@ -347,14 +354,30 @@ public final class ConsoleService {
     }
 
     public synchronized void deletePath(String remotePath, boolean directory) {
-        rawCommand("delete name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath) + (directory ? " dir" : ""));
+        String response = rawCommand("delete name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath)
+                + (directory ? " dir" : ""));
+        throwIfXbdmError(response, "delete");
     }
 
     private void uploadFileWithinTransfer(Path localPath, String remotePath, long base,
                                           long total, TransferProgress progress) throws IOException {
         String name = localPath.getFileName() == null ? localPath.toString() : localPath.getFileName().toString();
-        ResumableUploader.upload(localPath, remotePath, remoteFile(), () -> fileTransferCancelled,
-                (completed, ignored, message) -> progress.update(saturatingAdd(base, completed), total, name + ": " + message));
+        ResumableUploader.Progress fileProgress = (completed, ignored, message) ->
+                progress.update(saturatingAdd(base, completed), total, name + ": " + message);
+
+        if (supportsPartialFileIo()) {
+            try {
+                ResumableUploader.upload(localPath, remotePath, remoteFile(), () -> fileTransferCancelled, fileProgress);
+                return;
+            } catch (IOException failure) {
+                if (!isUnsupportedPartialFileCommand(failure)) throw failure;
+                partialFileIoSupported = false;
+                fileProgress.update(0, Files.size(localPath),
+                        "Console uses whole-file transfers; restarting this file");
+            }
+        }
+
+        WholeFileUploader.upload(localPath, remotePath, wholeRemoteFile(), () -> fileTransferCancelled, fileProgress);
     }
 
     private void downloadFileWithinTransfer(String remotePath, Path localPath, long base,
@@ -493,6 +516,53 @@ public final class ConsoleService {
         };
     }
 
+    private WholeFileUploader.RemoteFile wholeRemoteFile() {
+        return new WholeFileUploader.RemoteFile() {
+            @Override
+            public long size(String path) throws ResumableUploader.RemoteException {
+                return remoteCall(() -> remoteFileSize(path));
+            }
+
+            @Override
+            public void delete(String path) throws ResumableUploader.RemoteException {
+                remoteRun(() -> deletePath(path, false));
+            }
+
+            @Override
+            public void send(Path localPath, String path, java.util.function.LongConsumer progress)
+                    throws ResumableUploader.RemoteException {
+                remoteRun(() -> requireXbdm().SendFile(localPath, path, progress));
+            }
+
+            @Override
+            public boolean matches(Path localPath, String path, java.util.function.LongConsumer progress)
+                    throws ResumableUploader.RemoteException {
+                return remoteCall(() -> requireXbdm().FileMatches(localPath, path, progress));
+            }
+
+            @Override
+            public void reconnect() throws ResumableUploader.RemoteException {
+                remoteRun(() -> {
+                    if (!ConsoleService.this.reconnect()) throw new IOException("Console is unavailable");
+                });
+            }
+        };
+    }
+
+    private boolean supportsPartialFileIo() {
+        if (partialFileIoSupported != null) return partialFileIoSupported;
+        try {
+            List<String> commands = rawCommand("help").lines()
+                    .map(String::trim)
+                    .map(value -> value.toLowerCase(Locale.ROOT))
+                    .toList();
+            partialFileIoSupported = commands.contains("writefile") && commands.contains("fileeof");
+            return partialFileIoSupported;
+        } catch (RuntimeException ignored) {
+            return true;
+        }
+    }
+
     private long remoteFileSize(String remotePath) {
         String normalized = remotePath.replace('/', '\\');
         int slash = normalized.lastIndexOf('\\');
@@ -527,17 +597,29 @@ public final class ConsoleService {
         return new ResumableUploader.RemoteException(isRetryableRemoteFailure(failure), message, failure);
     }
 
-    private static boolean isRetryableRemoteFailure(Exception failure) {
+    static boolean isRetryableRemoteFailure(Exception failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SocketTimeoutException || cause instanceof ConnectException
+                    || cause instanceof SocketException || cause instanceof EOFException) return true;
+        }
         String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
         String lower = message.toLowerCase(Locale.ROOT);
         if (failure instanceof java.nio.file.FileSystemException) return false;
         return failure instanceof IOException
-                || lower.contains("i/o")
-                || lower.contains("connect")
+                || lower.startsWith("i/o:")
+                || lower.contains("connect failed")
+                || lower.contains("connection reset")
                 || lower.contains("closed")
-                || lower.contains("eof")
-                || lower.contains("timed out")
-                || lower.contains("completion failed");
+                || lower.contains("unexpected eof")
+                || lower.contains("timed out");
+    }
+
+    private static boolean isUnsupportedPartialFileCommand(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message != null && message.toLowerCase(Locale.ROOT).contains("407- unknown command")) return true;
+        }
+        return false;
     }
 
     private JRPC.IXboxConsole requireConsole() {
