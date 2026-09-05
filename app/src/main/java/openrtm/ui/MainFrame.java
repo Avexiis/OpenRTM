@@ -140,6 +140,7 @@ public final class MainFrame extends JFrame {
         addPage(navigationModel, "Memory/Commands", memoryPanel());
         addPage(navigationModel, "Files", filesPanel());
         addPage(navigationModel, "ISO Tool", new IsoToolPanel(this::runTask));
+        addPage(navigationModel, "Game Save Editor", new GameSaveEditorPanel(this::runTask));
 
         JList<String> navigation = new JList<>(navigationModel);
         navigation.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
