@@ -8,6 +8,7 @@ import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTree;
@@ -52,6 +53,9 @@ public final class FileBrowserPanel extends JPanel {
     private final JTree remoteTree = new JTree(remoteModel);
     private final JLabel localPath = new JLabel(" ");
     private final JLabel remotePath = new JLabel(" ");
+    private final JProgressBar uploadProgress = new JProgressBar(0, 100);
+    private final JLabel uploadStatus = new JLabel(" ");
+    private final JButton cancelUpload = button("Cancel Upload");
 
     public FileBrowserPanel(ConsoleService service, TaskRunner tasks) {
         super(new BorderLayout(10, 10));
@@ -74,8 +78,10 @@ public final class FileBrowserPanel extends JPanel {
     }
 
     private JPanel toolbar() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
+        JPanel panel = new JPanel(new BorderLayout(8, 2));
         panel.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, LINE));
+
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
 
         JButton refreshLocal = button("Refresh PC");
         JButton refreshRemote = button("Refresh Console");
@@ -90,13 +96,25 @@ public final class FileBrowserPanel extends JPanel {
         download.addActionListener(e -> downloadSelectedFile());
         newFolder.addActionListener(e -> createRemoteFolder());
         delete.addActionListener(e -> deleteSelectedRemote());
+        cancelUpload.addActionListener(e -> service.cancelUpload());
+        cancelUpload.setEnabled(false);
 
-        panel.add(refreshLocal);
-        panel.add(refreshRemote);
-        panel.add(upload);
-        panel.add(download);
-        panel.add(newFolder);
-        panel.add(delete);
+        actions.add(refreshLocal);
+        actions.add(refreshRemote);
+        actions.add(upload);
+        actions.add(download);
+        actions.add(newFolder);
+        actions.add(delete);
+        actions.add(cancelUpload);
+
+        uploadProgress.setStringPainted(true);
+        uploadProgress.setVisible(false);
+        JPanel progress = new JPanel(new BorderLayout(8, 0));
+        progress.add(uploadStatus, BorderLayout.CENTER);
+        progress.add(uploadProgress, BorderLayout.EAST);
+
+        panel.add(actions, BorderLayout.NORTH);
+        panel.add(progress, BorderLayout.SOUTH);
         return panel;
     }
 
@@ -288,10 +306,30 @@ public final class FileBrowserPanel extends JPanel {
         }
 
         String remoteFilePath = childRemotePath(ensureRemoteDirectory(remoteDirectory.remotePath()), localEntry.localPath().getFileName().toString());
+        cancelUpload.setEnabled(true);
+        uploadProgress.setValue(0);
+        uploadProgress.setVisible(true);
+        uploadStatus.setText("Preparing upload");
         tasks.run("upload file", () -> {
-            service.uploadFile(localEntry.localPath(), remoteFilePath);
-            List<DefaultMutableTreeNode> children = remoteChildren(remoteDirectory);
-            SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, remoteDirectoryNode, remoteDirectory, children));
+            try {
+                service.uploadFile(localEntry.localPath(), remoteFilePath, this::updateUploadProgress);
+                List<DefaultMutableTreeNode> children = remoteChildren(remoteDirectory);
+                SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, remoteDirectoryNode, remoteDirectory, children));
+            } finally {
+                SwingUtilities.invokeLater(() -> {
+                    cancelUpload.setEnabled(false);
+                    uploadProgress.setVisible(false);
+                });
+            }
+        });
+    }
+
+    private void updateUploadProgress(long completed, long total, String message) {
+        SwingUtilities.invokeLater(() -> {
+            int percent = total <= 0 ? 100 : (int) Math.min(100, Math.round((completed * 100.0) / total));
+            uploadProgress.setValue(percent);
+            uploadProgress.setString(percent + "%");
+            uploadStatus.setText(message);
         });
     }
 

@@ -2,8 +2,6 @@ package openrtm.ui;
 
 import com.jjrpc.JRPC;
 import openrtm.console.ConsoleService;
-import openrtm.games.GameDefinition;
-import openrtm.games.GameDefinitions;
 import openrtm.ui.files.FileBrowserPanel;
 import openrtm.util.HexUtils;
 
@@ -37,6 +35,10 @@ import java.awt.GridLayout;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 public final class MainFrame extends JFrame {
     private static final Color LINE = new Color(55, 60, 66);
@@ -53,10 +55,19 @@ public final class MainFrame extends JFrame {
         thread.setDaemon(true);
         return thread;
     });
+    private final ScheduledExecutorService reconnectExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "openrtm-reconnect");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final JComboBox<String> hostField = hostCombo();
     private final JCheckBox autoConnect = new JCheckBox("Autoconnect", service.autoConnect());
     private final JLabel status = new JLabel("Disconnected");
     private FileBrowserPanel fileBrowserPanel;
+    private volatile boolean reconnectWanted;
+    private volatile String reconnectHost = "";
+    private ScheduledFuture<?> reconnectFuture;
+    private int reconnectDelayIndex;
     private final DefaultTableModel infoModel = new DefaultTableModel(new Object[]{"Field", "Value"}, 0) {
         @Override
         public boolean isCellEditable(int row, int column) {
@@ -76,12 +87,22 @@ public final class MainFrame extends JFrame {
         add(shell(), BorderLayout.CENTER);
         status.setForeground(WARN);
 
-        autoConnect.addActionListener(e -> service.autoConnect(autoConnect.isSelected()));
+        autoConnect.addActionListener(e -> {
+            service.autoConnect(autoConnect.isSelected());
+            if (autoConnect.isSelected() && !service.isConnected() && !selectedHost().isBlank()) {
+                connect();
+            } else if (!autoConnect.isSelected() && !service.isConnected()) {
+                stopReconnect();
+            }
+        });
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent e) {
+                stopReconnect();
+                service.cancelUpload();
                 service.disconnect();
                 executor.shutdownNow();
+                reconnectExecutor.shutdownNow();
             }
         });
         if (autoConnect.isSelected() && !selectedHost().isBlank()) {
@@ -97,6 +118,8 @@ public final class MainFrame extends JFrame {
         JButton refresh = button("Refresh Info");
         connect.addActionListener(e -> connect());
         disconnect.addActionListener(e -> runTask("disconnect", () -> {
+            stopReconnect();
+            service.cancelUpload();
             service.disconnect();
             SwingUtilities.invokeLater(() -> setStatus("Disconnected", WARN));
         }));
@@ -116,9 +139,7 @@ public final class MainFrame extends JFrame {
         addPage(navigationModel, "Dashboard", dashboardPanel());
         addPage(navigationModel, "Memory/Commands", memoryPanel());
         addPage(navigationModel, "Files", filesPanel());
-        for (GameDefinition game : GameDefinitions.all()) {
-            addPage(navigationModel, game.name(), new GamePagePanel(service, game, this::runTask));
-        }
+        addPage(navigationModel, "ISO Tool", new IsoToolPanel(this::runTask));
 
         JList<String> navigation = new JList<>(navigationModel);
         navigation.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -252,15 +273,79 @@ public final class MainFrame extends JFrame {
 
     private void connect() {
         String host = selectedHost();
+        if (host.isBlank()) {
+            JOptionPane.showMessageDialog(this, "Enter a console host or IP address", "Connect", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        reconnectHost = host;
+        reconnectWanted = true;
         runTask("connect", () -> {
-            if (!service.connect(host)) throw new IllegalStateException("Could not connect to " + host);
-            SwingUtilities.invokeLater(() -> {
-                rememberHostInCombo(host);
-                setStatus("Connected to " + host, OK);
-                if (fileBrowserPanel != null) fileBrowserPanel.refreshConsoleDrives();
-                refreshInfo();
-            });
+            try {
+                if (!service.connect(host)) throw new IllegalStateException("Could not connect to " + host);
+                reconnectDelayIndex = 0;
+                SwingUtilities.invokeLater(() -> connected(host, true));
+            } finally {
+                scheduleReconnectCheck(nextReconnectDelay());
+            }
         });
+    }
+
+    private void connected(String host, boolean refresh) {
+        rememberHostInCombo(host);
+        setStatus("Connected to " + host, OK);
+        if (refresh) {
+            if (fileBrowserPanel != null) fileBrowserPanel.refreshConsoleDrives();
+            refreshInfo();
+        }
+    }
+
+    private void reconnectTick() {
+        if (!reconnectWanted) return;
+        if (service.isUploadInProgress()) {
+            scheduleReconnectCheck(nextReconnectDelay());
+            return;
+        }
+        if (service.connectionAlive()) {
+            reconnectDelayIndex = 0;
+            scheduleReconnectCheck(nextReconnectDelay());
+            return;
+        }
+
+        String host = reconnectHost;
+        SwingUtilities.invokeLater(() -> setStatus("Reconnecting to " + host + "...", WARN));
+        boolean connected = false;
+        try {
+            connected = service.connect(host);
+        } catch (RuntimeException ignored) {
+        }
+        if (connected) {
+            reconnectDelayIndex = 0;
+            SwingUtilities.invokeLater(() -> connected(host, false));
+        }
+        scheduleReconnectCheck(nextReconnectDelay());
+    }
+
+    private synchronized void scheduleReconnectCheck(long delayMs) {
+        if (!reconnectWanted || reconnectExecutor.isShutdown()) return;
+        if (reconnectFuture != null && !reconnectFuture.isDone()) return;
+        reconnectFuture = reconnectExecutor.schedule(() -> {
+            synchronized (MainFrame.this) {
+                reconnectFuture = null;
+            }
+            reconnectTick();
+        }, delayMs, TimeUnit.MILLISECONDS);
+    }
+
+    private long nextReconnectDelay() {
+        long[] delays = {3_500, 5_000, 4_250, 6_500, 5_750};
+        long base = delays[reconnectDelayIndex++ % delays.length];
+        return base + ThreadLocalRandom.current().nextLong(250, 1_000);
+    }
+
+    private synchronized void stopReconnect() {
+        reconnectWanted = false;
+        if (reconnectFuture != null) reconnectFuture.cancel(false);
+        reconnectFuture = null;
     }
 
     private void refreshInfo() {

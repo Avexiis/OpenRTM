@@ -7,25 +7,26 @@ import openrtm.util.HexUtils;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class ConsoleService {
     private static final long XAM_GAMERTAG_ADDRESS = 0x81AA28FCL;
-    private static final long XAM_SPOOF_GAMERTAG_ADDRESS = 0x81AA261CL;
-    private static final long SPOOF_IP_ADDRESS = 0xC24313E0L;
 
     private final AppSettings settings = new AppSettings();
     private JRPC.IXboxConsole console;
-    private JRPC.XbdmXboxConsole xbdmConsole;
+    private volatile JRPC.XbdmXboxConsole xbdmConsole;
+    private String currentHost = "";
+    private volatile boolean uploadInProgress;
+    private volatile boolean uploadCancelled;
 
     public synchronized String savedHost() {
         return settings.lastHost().orElse("");
@@ -50,17 +51,34 @@ public final class ConsoleService {
     public synchronized boolean connect(String host) {
         String target = host == null ? "" : host.trim();
         if (target.isBlank()) throw new IllegalArgumentException("Enter a console host or IP address");
+        closeConsole();
         JRPC.IXboxConsole[] out = new JRPC.IXboxConsole[1];
         boolean ok = JRPC.Connect(null, out, target);
         if (!ok) return false;
         console = out[0];
         xbdmConsole = console instanceof JRPC.XbdmXboxConsole xbdm ? xbdm : null;
         if (xbdmConsole != null) xbdmConsole.setConversationTimeout(15_000);
+        currentHost = target;
         settings.rememberHost(target);
+        try {
+            JRPC.XNotify(console, JRPC.XNotiyLogo.FLASHING_HAPPY_FACE, "OpenRTM Connected!");
+        } catch (RuntimeException failure) {
+            closeConsole();
+            throw failure;
+        }
         return true;
     }
 
+    public synchronized boolean reconnect() {
+        String target = currentHost.isBlank() ? savedHost() : currentHost;
+        return !target.isBlank() && connect(target);
+    }
+
     public synchronized void disconnect() {
+        closeConsole();
+    }
+
+    private void closeConsole() {
         if (xbdmConsole != null) xbdmConsole.Close();
         console = null;
         xbdmConsole = null;
@@ -68,6 +86,16 @@ public final class ConsoleService {
 
     public synchronized boolean isConnected() {
         return console != null && (xbdmConsole == null || xbdmConsole.IsConnected());
+    }
+
+    public synchronized boolean connectionAlive() {
+        if (!isConnected()) return false;
+        try {
+            rawCommand("getpid");
+            return true;
+        } catch (RuntimeException failure) {
+            return false;
+        }
     }
 
     public synchronized Map<String, String> readInfo() {
@@ -153,48 +181,8 @@ public final class ConsoleService {
         writeMemory(address, HexUtils.asciiNull(value));
     }
 
-    public synchronized void writeFixedAscii(long address, String value, int length) {
-        byte[] raw = value == null ? new byte[0] : value.getBytes(StandardCharsets.US_ASCII);
-        byte[] out = new byte[length];
-        System.arraycopy(raw, 0, out, 0, Math.min(raw.length, out.length));
-        writeMemory(address, out);
-    }
-
     public synchronized void writeUtf16BigNull(long address, String value) {
         writeMemory(address, HexUtils.utf16BigNull(value));
-    }
-
-    public synchronized void cbuf(long address, String command) {
-        JRPC.CallVoid(requireConsole(), address, 0, command);
-    }
-
-    public synchronized void titleCallVoid(long address, Object... args) {
-        JRPC.CallVoid(requireConsole(), JRPC.ThreadType.Title, address, args);
-    }
-
-    public synchronized void callVoid(long address, Object... args) {
-        JRPC.CallVoid(requireConsole(), address, args);
-    }
-
-    public synchronized long titleCallLong(long address, Object... args) {
-        Object value = JRPC.<Object>Call(requireConsole(), JRPC.ThreadType.Title, address, args);
-        if (value instanceof Number n) return n.longValue();
-        return Long.parseUnsignedLong(Objects.toString(value, "0"), 16);
-    }
-
-    public synchronized long readUInt32(long address) {
-        return JRPC.ReadUInt32(requireConsole(), address);
-    }
-
-    public synchronized int readInt32(long address) {
-        return JRPC.ReadInt32(requireConsole(), address);
-    }
-
-    public synchronized String readString(long address, int length) {
-        byte[] data = readMemory(address, length);
-        int end = 0;
-        while (end < data.length && data[end] != 0) end++;
-        return new String(data, 0, end, StandardCharsets.US_ASCII);
     }
 
     public synchronized String readCurrentGamertag() {
@@ -205,20 +193,30 @@ public final class ConsoleService {
         return value.trim();
     }
 
-    public synchronized void xamSpoofGamertag(String gamertag) {
-        writeUtf16BigNull(XAM_SPOOF_GAMERTAG_ADDRESS, gamertag);
-    }
-
-    public synchronized void spoofIp(String ipAddress) {
-        String[] parts = ipAddress.trim().split("\\.");
-        if (parts.length != 4) throw new IllegalArgumentException("IP must have four octets");
-        byte[] data = new byte[4];
-        for (int i = 0; i < parts.length; i++) data[i] = (byte) (Integer.parseInt(parts[i]) & 0xFF);
-        writeMemory(SPOOF_IP_ADDRESS, data);
-    }
-
     public synchronized void uploadFile(Path localPath, String remotePath) throws IOException {
-        requireXbdm().SendFile(localPath, remotePath);
+        uploadFile(localPath, remotePath, (completed, total, message) -> {
+        });
+    }
+
+    public synchronized void uploadFile(Path localPath, String remotePath, TransferProgress progress) throws IOException {
+        if (!Files.isRegularFile(localPath)) throw new IOException("Local file does not exist: " + localPath);
+        uploadCancelled = false;
+        uploadInProgress = true;
+        try {
+            ResumableUploader.upload(localPath, remotePath, remoteFile(), () -> uploadCancelled, progress::update);
+        } finally {
+            uploadInProgress = false;
+        }
+    }
+
+    public boolean isUploadInProgress() {
+        return uploadInProgress;
+    }
+
+    public void cancelUpload() {
+        uploadCancelled = true;
+        JRPC.XbdmXboxConsole active = xbdmConsole;
+        if (uploadInProgress && active != null) active.Abort();
     }
 
     public synchronized void downloadFile(String remotePath, Path localPath) throws IOException {
@@ -255,6 +253,79 @@ public final class ConsoleService {
 
     public synchronized void deletePath(String remotePath, boolean directory) {
         rawCommand("delete name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath) + (directory ? " dir" : ""));
+    }
+
+    private ResumableUploader.RemoteFile remoteFile() {
+        return new ResumableUploader.RemoteFile() {
+            @Override
+            public long size(String path) throws ResumableUploader.RemoteException {
+                return remoteCall(() -> remoteFileSize(path));
+            }
+
+            @Override
+            public byte[] read(String path, long offset, int length) throws ResumableUploader.RemoteException {
+                return remoteCall(() -> requireXbdm().ReadFilePartial(path, offset, length));
+            }
+
+            @Override
+            public void write(String path, long offset, byte[] data) throws ResumableUploader.RemoteException {
+                remoteRun(() -> requireXbdm().WriteFilePartial(path, offset, data));
+            }
+
+            @Override
+            public void resize(String path, long size, boolean create) throws ResumableUploader.RemoteException {
+                remoteRun(() -> requireXbdm().SetFileSize(path, size, create, create));
+            }
+
+            @Override
+            public void reconnect() throws ResumableUploader.RemoteException {
+                remoteRun(() -> {
+                    if (!ConsoleService.this.reconnect()) throw new IOException("Console is unavailable");
+                });
+            }
+        };
+    }
+
+    private long remoteFileSize(String remotePath) {
+        String normalized = remotePath.replace('/', '\\');
+        int slash = normalized.lastIndexOf('\\');
+        String directory = slash >= 0 ? normalized.substring(0, slash + 1) : normalized;
+        String fileName = slash >= 0 ? normalized.substring(slash + 1) : normalized;
+        for (FileEntry entry : listDirectory(directory)) {
+            String entryName = entry.name().replace('/', '\\');
+            int entrySlash = entryName.lastIndexOf('\\');
+            if (entrySlash >= 0) entryName = entryName.substring(entrySlash + 1);
+            if (!entry.directory() && entryName.equalsIgnoreCase(fileName)) return entry.size();
+        }
+        return -1;
+    }
+
+    private <T> T remoteCall(RemoteSupplier<T> action) throws ResumableUploader.RemoteException {
+        try {
+            return action.get();
+        } catch (Exception failure) {
+            throw remoteFailure(failure);
+        }
+    }
+
+    private void remoteRun(RemoteRunnable action) throws ResumableUploader.RemoteException {
+        remoteCall(() -> {
+            action.run();
+            return null;
+        });
+    }
+
+    private static ResumableUploader.RemoteException remoteFailure(Exception failure) {
+        String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+        String lower = message.toLowerCase(Locale.ROOT);
+        boolean retryable = failure instanceof IOException
+                || lower.contains("i/o")
+                || lower.contains("connect")
+                || lower.contains("closed")
+                || lower.contains("eof")
+                || lower.contains("timed out")
+                || lower.contains("completion failed");
+        return new ResumableUploader.RemoteException(retryable, message, failure);
     }
 
     private JRPC.IXboxConsole requireConsole() {
@@ -356,5 +427,20 @@ public final class ConsoleService {
     }
 
     public record FileEntry(String name, long size, boolean directory, String raw) {
+    }
+
+    @FunctionalInterface
+    public interface TransferProgress {
+        void update(long completed, long total, String message);
+    }
+
+    @FunctionalInterface
+    private interface RemoteSupplier<T> {
+        T get() throws Exception;
+    }
+
+    @FunctionalInterface
+    private interface RemoteRunnable {
+        void run() throws Exception;
     }
 }

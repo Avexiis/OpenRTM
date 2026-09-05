@@ -83,7 +83,7 @@ public final class JRPC {
     public static final class XbdmXboxConsole implements IXboxConsole {
         private final String host;
         private final int port;
-        private Socket sock;
+        private volatile Socket sock;
         private BufferedInputStream bin;
         private BufferedOutputStream bout;
         private int connectTimeout = 5000;
@@ -194,6 +194,15 @@ public final class JRPC {
             closeQuietly();
         }
 
+        public void Abort() {
+            Socket activeSocket = sock;
+            if (activeSocket == null) return;
+            try {
+                activeSocket.close();
+            } catch (IOException ignored) {
+            }
+        }
+
         public synchronized void SendFile(Path localPath, String remotePath) throws IOException {
             ensureConnected();
             int previousTimeout = useSocketTimeout(transferTimeout());
@@ -221,6 +230,9 @@ public final class JRPC {
                 } catch (SocketTimeoutException timeoutAfterPayload) {
                     closeQuietly();
                 }
+            } catch (IOException e) {
+                closeQuietly();
+                throw e;
             } finally {
                 restoreSocketTimeout(previousTimeout);
             }
@@ -256,6 +268,9 @@ public final class JRPC {
                         remaining -= chunk;
                     }
                 }
+            } catch (IOException e) {
+                closeQuietly();
+                throw e;
             } finally {
                 restoreSocketTimeout(previousTimeout);
             }
@@ -263,34 +278,51 @@ public final class JRPC {
 
         public synchronized byte[] ReadFilePartial(String remotePath, long offset, int length) throws IOException {
             ensureConnected();
-            writeLine("getfile name=" + quoteXbdm(remotePath) + " offset=" + offset + " size=" + length);
-            String first = readAsciiLine();
-            if (statusCode(first) != 203) {
-                throw new ComException(UIntToInt(0x82DA0007L), "partial getfile failed: " + first);
+            int previousTimeout = useSocketTimeout(transferTimeout());
+            try {
+                writeLine("getfile name=" + quoteXbdm(remotePath) + " offset=" + offset + " size=" + length);
+                String first = readAsciiLine();
+                if (statusCode(first) != 203) {
+                    throw new ComException(UIntToInt(0x82DA0007L), "partial getfile failed: " + first);
+                }
+                byte[] hdr = readN(4);
+                long n = (hdr[0] & 0xFFL) | ((hdr[1] & 0xFFL) << 8)
+                        | ((hdr[2] & 0xFFL) << 16) | ((hdr[3] & 0xFFL) << 24);
+                if (n > length) throw new IOException("Console returned more data than requested");
+                return readN((int) n);
+            } catch (IOException e) {
+                closeQuietly();
+                throw e;
+            } finally {
+                restoreSocketTimeout(previousTimeout);
             }
-            byte[] hdr = readN(4);
-            long n = (hdr[0] & 0xFFL) | ((hdr[1] & 0xFFL) << 8)
-                    | ((hdr[2] & 0xFFL) << 16) | ((hdr[3] & 0xFFL) << 24);
-            return readN((int) Math.min(n, Integer.MAX_VALUE));
         }
 
         public synchronized void WriteFilePartial(String remotePath, long offset, byte[] data) throws IOException {
             ensureConnected();
-            writeLine("writefile name=" + quoteXbdm(remotePath) + " offset=" + offset + " length=" + data.length);
-            String first = readAsciiLine();
-            if (statusCode(first) != 204) {
-                throw new ComException(UIntToInt(0x82DA0007L), "partial writefile failed: " + first);
-            }
-            bout.write(data);
-            bout.flush();
-            String post = readAsciiLine();
-            if (statusCode(post) < 200 || statusCode(post) >= 300) {
-                throw new ComException(UIntToInt(0x82DA0007L), "partial writefile completion failed: " + post);
+            int previousTimeout = useSocketTimeout(transferTimeout());
+            try {
+                writeLine("writefile name=" + quoteXbdm(remotePath) + " offset=" + offset + " length=" + data.length);
+                String first = readAsciiLine();
+                if (statusCode(first) != 204) {
+                    throw new ComException(UIntToInt(0x82DA0007L), "partial writefile failed: " + first);
+                }
+                bout.write(data);
+                bout.flush();
+                String post = readAsciiLine();
+                if (statusCode(post) < 200 || statusCode(post) >= 300) {
+                    throw new ComException(UIntToInt(0x82DA0007L), "partial writefile completion failed: " + post);
+                }
+            } catch (IOException e) {
+                closeQuietly();
+                throw e;
+            } finally {
+                restoreSocketTimeout(previousTimeout);
             }
         }
 
         private int transferTimeout() {
-            return Math.max(conversationTimeout, 60_000);
+            return Math.max(conversationTimeout, 10 * 60_000);
         }
 
         private int useSocketTimeout(int timeoutMs) throws IOException {
@@ -309,7 +341,11 @@ public final class JRPC {
 
         public synchronized void SetFileSize(String remotePath, long size, boolean canCreate, boolean mustCreate) {
             String suffix = mustCreate ? " mustcreate" : (canCreate ? " cancreate" : "");
-            SendRawCommand("fileeof name=" + quoteXbdm(remotePath) + " size=" + size + suffix);
+            String response = SendRawCommand("fileeof name=" + quoteXbdm(remotePath) + " size=" + size + suffix);
+            int status = statusCode(response);
+            if (status < 200 || status >= 300) {
+                throw new ComException(UIntToInt(0x82DA0007L), "fileeof failed: " + response);
+            }
         }
 
         public static String quoteXbdm(String value) {
