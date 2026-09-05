@@ -52,6 +52,32 @@ The Commands page sends a raw XBDM command and shows the console response.
 
 Memory writes and raw commands are advanced features. An incorrect address, value, or command can crash the current game or freeze the console.
 
+## Debugger
+
+The Debugger page can receive live debugging messages from the console and control a running title. Connect to the console first, open the Debugger page, then click **Attach**.
+
+The console opens a separate connection back to OpenRTM for debugger messages. Your computer's firewall must allow OpenRTM to receive connections from the local network. The callback uses a temporary port chosen each time the debugger is attached.
+
+Enable **Override existing debugger** only when the console reports that another debugger is already attached, and you intend to replace it.
+
+The debugger controls can:
+
+* Pause and continue the running title
+* Show DbgPrint and other debug strings, exceptions, execution changes, module changes, and thread events
+* Stop on selected exception, debug string, thread, stack trace, or module events
+* Add and remove software or hardware breakpoints
+* List threads, halt or continue a thread, change its suspend count, and read its registers
+* List the modules loaded by the current title
+* Save the displayed output to a text log
+
+For a software breakpoint, enter the instruction address and choose **Software execute**. Hardware breakpoints can watch a 1, 2, 4, or 8 byte address range for reads, writes, both, or execution. Remove breakpoints before leaving a title when possible. OpenRTM also clears the breakpoints it created when you detach normally.
+
+Select a thread before using the thread controls. **Continue Exception** passes the current exception back to the title while continuing that thread. A normal **Continue** resumes it without passing the exception.
+
+Pause, thread halt, break conditions, and breakpoints can interrupt a title at sensitive points. If the console stops responding, avoid repeatedly sending more commands. Detach or reconnect after the console becomes available again.
+
+DbgPrint output forwarded by XBDM is captured automatically after attaching. The separate KD network transport used for early boot and kernel debugging is not enabled by this page.
+
 ## File transfer
 
 The File Transfer page shows files on your computer on the left and console storage on the right. Expand a folder to load its contents.

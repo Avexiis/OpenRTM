@@ -29,6 +29,7 @@ public final class ConsoleService
 	private static final long[] TRANSFER_RETRY_DELAYS_MS = {2_000, 3_500, 5_000, 4_000, 6_500};
 
 	private final AppSettings settings = new AppSettings();
+	private final DebuggerService debugger = new DebuggerService(this);
 	private JRPC.IXboxConsole console;
 	private volatile JRPC.XbdmXboxConsole xbdmConsole;
 	private String currentHost = "";
@@ -108,11 +109,39 @@ public final class ConsoleService
 
 	public synchronized void disconnect()
 	{
-		closeConsole();
+		try
+		{
+			debugger.detach();
+		}
+		catch (RuntimeException ignored)
+		{
+		}
+		finally
+		{
+			closeConsole();
+		}
+	}
+
+	public DebuggerService debugger()
+	{
+		return debugger;
+	}
+
+	synchronized String debuggerHost()
+	{
+		requireXbdm();
+		return currentHost;
+	}
+
+	synchronized int debuggerPort()
+	{
+		requireXbdm();
+		return 730;
 	}
 
 	private void closeConsole()
 	{
+		debugger.connectionClosing();
 		if (xbdmConsole != null)
 		{
 			xbdmConsole.Close();

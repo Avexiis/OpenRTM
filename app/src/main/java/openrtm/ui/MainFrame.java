@@ -150,6 +150,7 @@ public final class MainFrame extends JFrame
 		DefaultListModel<String> navigationModel = new DefaultListModel<>();
 		addPage(navigationModel, "Home", dashboardPanel());
 		addPage(navigationModel, "Memory & Commands", memoryPanel());
+		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
 		addPage(navigationModel, "ISO Extractor", new IsoToolPanel(this::runTask));
 		addPage(navigationModel, "Game Save Editor", new GameSaveEditorPanel(this::runTask));
