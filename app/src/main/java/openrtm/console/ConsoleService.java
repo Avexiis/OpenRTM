@@ -3,6 +3,7 @@ package openrtm.console;
 import com.jjrpc.JRPC;
 import com.jjrpc.xdevkit.XboxFeatures;
 import openrtm.config.AppSettings;
+import openrtm.titleids.TitleIds;
 import openrtm.util.HexUtils;
 
 import java.io.IOException;
@@ -112,7 +113,7 @@ public final class ConsoleService {
         info.put("IP", safe(() -> JRPC.XboxIP(c)));
         info.put("CPU Key", safe(() -> JRPC.GetCPUKey(c)));
         info.put("Gamertag", safe(this::readCurrentGamertag));
-        info.put("Title ID", safe(() -> HexUtils.hex32(JRPC.XamGetCurrentTitleId(c))));
+        info.put("Title", safe(() -> TitleIds.displayName(HexUtils.hex32(JRPC.XamGetCurrentTitleId(c)))));
         info.put("Console Type", safe(() -> JRPC.ConsoleType(c)));
         info.put("Kernel", safe(() -> Long.toString(JRPC.GetKernelVersion(c))));
         //info.put("DM Version", safe(() -> XboxFeatures.getDMVersion(c))); //who cares

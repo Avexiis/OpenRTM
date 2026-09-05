@@ -1,6 +1,7 @@
 package openrtm.ui.files;
 
 import openrtm.console.ConsoleService;
+import openrtm.titleids.TitleIds;
 import openrtm.ui.TaskRunner;
 
 import javax.swing.BorderFactory;
@@ -13,6 +14,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTree;
 import javax.swing.SwingUtilities;
+import javax.swing.ToolTipManager;
 import javax.swing.UIManager;
 import javax.swing.event.TreeExpansionEvent;
 import javax.swing.event.TreeSelectionEvent;
@@ -21,11 +23,17 @@ import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.ExpandVetoException;
+import javax.swing.tree.TreeCellRenderer;
 import javax.swing.tree.TreePath;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Insets;
+import java.awt.Rectangle;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -36,12 +44,16 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class FileBrowserPanel extends JPanel {
     private static final Color LINE = new Color(55, 60, 66);
     private static final Color ACCENT = new Color(91, 141, 239);
+    private static final Pattern CONTENT_OWNER_PATH = Pattern.compile(
+            "(?i)^Hdd:\\\\Content\\\\[0-9A-F]{16}\\\\?$");
 
     private final ConsoleService service;
     private final TaskRunner tasks;
@@ -134,6 +146,15 @@ public final class FileBrowserPanel extends JPanel {
         tree.setRootVisible(false);
         tree.setShowsRootHandles(true);
         tree.setCellRenderer(new BrowserTreeCellRenderer());
+        if (!local) {
+            ToolTipManager.sharedInstance().registerComponent(tree);
+            tree.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseClicked(MouseEvent event) {
+                    showRemoteTitleId(event);
+                }
+            });
+        }
         tree.addTreeWillExpandListener(new TreeWillExpandListener() {
             @Override
             public void treeWillExpand(TreeExpansionEvent event) throws ExpandVetoException {
@@ -269,15 +290,34 @@ public final class FileBrowserPanel extends JPanel {
         List<ConsoleService.FileEntry> entries = new ArrayList<>(service.listDirectory(parentPath));
         entries.sort(Comparator
                 .comparing((ConsoleService.FileEntry entry) -> !entry.directory())
-                .thenComparing(entry -> displayRemoteName(entry.name()).toLowerCase(Locale.ROOT)));
+                .thenComparing(entry -> remoteDisplayName(parentPath, entry).toLowerCase(Locale.ROOT)));
 
         List<DefaultMutableTreeNode> children = new ArrayList<>();
         for (ConsoleService.FileEntry entry : entries) {
-            String displayName = displayRemoteName(entry.name());
+            Optional<TitleIds.Title> title = contentTitle(parentPath, entry.name(), entry.directory());
+            String displayName = title.map(TitleIds.Title::name).orElseGet(() -> displayRemoteName(entry.name()));
             String path = childRemotePath(parentPath, entry.name());
-            children.add(newNode(BrowserNode.remote(displayName, path, entry.directory(), entry.size())));
+            String titleId = title.map(TitleIds.Title::id).orElse(null);
+            children.add(newNode(BrowserNode.remote(displayName, path, entry.directory(), entry.size(), titleId)));
         }
         return children;
+    }
+
+    private void showRemoteTitleId(MouseEvent event) {
+        if (!SwingUtilities.isLeftMouseButton(event)) return;
+        TreePath path = remoteTree.getPathForLocation(event.getX(), event.getY());
+        if (path == null) return;
+        DefaultMutableTreeNode node = treeNode(path);
+        BrowserNode entry = browserNode(node);
+        if (entry == null || entry.titleId() == null) return;
+
+        Rectangle bounds = remoteTree.getPathBounds(path);
+        if (bounds == null || event.getX() < bounds.x + bounds.width - BrowserTreeCellRenderer.ID_BUTTON_WIDTH) {
+            return;
+        }
+
+        event.consume();
+        JOptionPane.showMessageDialog(this, entry.titleId(), "Actual folder name", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private void replaceChildren(DefaultTreeModel model, DefaultMutableTreeNode parent, BrowserNode parentEntry, List<DefaultMutableTreeNode> children) {
@@ -540,28 +580,73 @@ public final class FileBrowserPanel extends JPanel {
         return ensureRemoteDirectory(parent) + displayRemoteName(normalizedChild);
     }
 
+    private static String remoteDisplayName(String parentPath, ConsoleService.FileEntry entry) {
+        return contentTitle(parentPath, entry.name(), entry.directory())
+                .map(TitleIds.Title::name)
+                .orElseGet(() -> displayRemoteName(entry.name()));
+    }
+
+    static Optional<TitleIds.Title> contentTitle(String parentPath, String childName, boolean directory) {
+        if (!directory) return Optional.empty();
+        String parent = parentPath == null ? "" : parentPath.trim().replace('/', '\\');
+        if (!CONTENT_OWNER_PATH.matcher(parent).matches()) return Optional.empty();
+        return TitleIds.find(displayRemoteName(childName));
+    }
+
     private static String displayRemoteName(String path) {
         String normalized = path == null ? "" : path.trim().replace('/', '\\');
         int slash = normalized.lastIndexOf('\\');
         return slash >= 0 ? normalized.substring(slash + 1) : normalized;
     }
 
-    private static final class BrowserTreeCellRenderer extends DefaultTreeCellRenderer {
+    private static final class BrowserTreeCellRenderer extends JPanel implements TreeCellRenderer {
+        private static final int ID_BUTTON_WIDTH = 34;
+        private final DefaultTreeCellRenderer label = new DefaultTreeCellRenderer();
+        private final JButton idButton = new JButton("ID");
+        private String titleId;
+
+        private BrowserTreeCellRenderer() {
+            super(new BorderLayout(4, 0));
+            setOpaque(true);
+            idButton.setFocusable(false);
+            idButton.setMargin(new Insets(0, 4, 0, 4));
+            idButton.setPreferredSize(new Dimension(ID_BUTTON_WIDTH, 22));
+        }
+
         @Override
         public Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected, boolean expanded,
                                                       boolean leaf, int row, boolean hasFocus) {
-            super.getTreeCellRendererComponent(tree, value, selected, expanded, leaf, row, hasFocus);
+            label.getTreeCellRendererComponent(tree, value, selected, expanded, leaf, row, hasFocus);
             BrowserNode entry = browserNode((DefaultMutableTreeNode) value);
             if (entry != null && !entry.placeholder()) {
                 if (entry.root()) {
-                    setIcon(UIManager.getIcon("FileView.computerIcon"));
+                    label.setIcon(UIManager.getIcon("FileView.computerIcon"));
                 } else if (entry.directory()) {
-                    setIcon(UIManager.getIcon("FileView.directoryIcon"));
+                    label.setIcon(UIManager.getIcon("FileView.directoryIcon"));
                 } else {
-                    setIcon(UIManager.getIcon("FileView.fileIcon"));
+                    label.setIcon(UIManager.getIcon("FileView.fileIcon"));
                 }
             }
+
+            removeAll();
+            add(label, BorderLayout.CENTER);
+            titleId = entry == null ? null : entry.titleId();
+            if (titleId != null) {
+                idButton.setToolTipText("Actual folder: " + titleId);
+                add(idButton, BorderLayout.EAST);
+            }
+            setBackground(selected
+                    ? label.getBackgroundSelectionColor()
+                    : label.getBackgroundNonSelectionColor());
             return this;
+        }
+
+        @Override
+        public String getToolTipText(MouseEvent event) {
+            if (titleId != null && event.getX() >= getWidth() - ID_BUTTON_WIDTH) {
+                return "Actual folder: " + titleId;
+            }
+            return null;
         }
     }
 
@@ -572,9 +657,11 @@ public final class FileBrowserPanel extends JPanel {
         private final String remotePath;
         private final boolean directory;
         private final long size;
+        private final String titleId;
         private boolean loaded;
 
-        private BrowserNode(NodeType type, String name, Path localPath, String remotePath, boolean directory, long size, boolean loaded) {
+        private BrowserNode(NodeType type, String name, Path localPath, String remotePath,
+                            boolean directory, long size, boolean loaded, String titleId) {
             this.type = type;
             this.name = name;
             this.localPath = localPath;
@@ -582,26 +669,32 @@ public final class FileBrowserPanel extends JPanel {
             this.directory = directory;
             this.size = size;
             this.loaded = loaded;
+            this.titleId = titleId;
         }
 
         static BrowserNode localRoot() {
-            return new BrowserNode(NodeType.LOCAL_ROOT, "PC", null, null, true, 0, true);
+            return new BrowserNode(NodeType.LOCAL_ROOT, "PC", null, null, true, 0, true, null);
         }
 
         static BrowserNode remoteRoot() {
-            return new BrowserNode(NodeType.REMOTE_ROOT, "Console", null, null, true, 0, true);
+            return new BrowserNode(NodeType.REMOTE_ROOT, "Console", null, null, true, 0, true, null);
         }
 
         static BrowserNode local(String name, Path path, boolean directory) {
-            return new BrowserNode(NodeType.LOCAL_ENTRY, name, path, null, directory, 0, !directory);
+            return new BrowserNode(NodeType.LOCAL_ENTRY, name, path, null, directory, 0, !directory, null);
         }
 
         static BrowserNode remote(String name, String path, boolean directory, long size) {
-            return new BrowserNode(NodeType.REMOTE_ENTRY, name, null, path, directory, size, !directory);
+            return remote(name, path, directory, size, null);
+        }
+
+        static BrowserNode remote(String name, String path, boolean directory, long size, String titleId) {
+            return new BrowserNode(NodeType.REMOTE_ENTRY, name, null, path, directory, size,
+                    !directory, titleId);
         }
 
         static BrowserNode placeholder(String name) {
-            return new BrowserNode(NodeType.PLACEHOLDER, name, null, null, false, 0, true);
+            return new BrowserNode(NodeType.PLACEHOLDER, name, null, null, false, 0, true, null);
         }
 
         boolean root() {
@@ -638,6 +731,10 @@ public final class FileBrowserPanel extends JPanel {
 
         String remotePath() {
             return remotePath;
+        }
+
+        String titleId() {
+            return titleId;
         }
 
         boolean loadableDirectory() {

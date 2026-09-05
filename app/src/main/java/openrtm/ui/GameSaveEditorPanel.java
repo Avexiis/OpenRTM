@@ -1,6 +1,7 @@
 package openrtm.ui;
 
 import openrtm.stfs.GameSaveService;
+import openrtm.titleids.TitleIds;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -71,6 +72,7 @@ public final class GameSaveEditorPanel extends JPanel {
     private JPanel fileSection() {
         JPanel panel = section("Game Save");
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
+        row.setAlignmentX(LEFT_ALIGNMENT);
         JButton browse = new JButton("Browse");
         browse.addActionListener(e -> chooseSource());
         row.add(source);
@@ -83,11 +85,11 @@ public final class GameSaveEditorPanel extends JPanel {
     private JPanel packageSection() {
         JPanel panel = section("Package");
         JPanel fields = fields();
-        addField(fields, 0, "Content type", contentType);
-        addField(fields, 1, "Title ID", titleId);
-        addField(fields, 2, "Package size", packageSize);
-        addField(fields, 3, "Header hash", headerStatus);
-        addField(fields, 4, "Signature", signatureStatus);
+        addField(fields, 0, "Content type", contentType, true);
+        addField(fields, 1, "Title", titleId, true);
+        addField(fields, 2, "Package size", packageSize, true);
+        addField(fields, 3, "Header hash", headerStatus, true);
+        addField(fields, 4, "Signature", signatureStatus, true);
         panel.add(fields);
         return panel;
     }
@@ -95,12 +97,14 @@ public final class GameSaveEditorPanel extends JPanel {
     private JPanel assignmentSection() {
         JPanel panel = section("Assignment");
         JPanel fields = fields();
-        addField(fields, 0, "Profile ID", profileId);
-        addField(fields, 1, "Console ID", consoleId);
-        addField(fields, 2, "Device ID", deviceId);
+        addField(fields, 0, "Profile ID", profileId, false);
+        addField(fields, 1, "Console ID", consoleId, false);
+        addField(fields, 2, "Device ID", deviceId, false);
+        lockPreferredWidth(fields);
         panel.add(fields);
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
+        actions.setAlignmentX(LEFT_ALIGNMENT);
         actions.add(createBackup);
         actions.add(save);
         actions.add(saveAs);
@@ -184,13 +188,19 @@ public final class GameSaveEditorPanel extends JPanel {
         });
     }
 
-    private void showInfo(GameSaveService.Info info, String message) {
+    void showInfo(GameSaveService.Info info, String message) {
         loadedFile = info.path();
         source.setText(info.path().toString());
         profileId.setText(info.profileId());
         consoleId.setText(info.consoleId());
         deviceId.setText(info.deviceId());
-        titleId.setText(info.titleId());
+        TitleIds.find(info.titleId()).ifPresentOrElse(title -> {
+            titleId.setText(title.name());
+            titleId.setToolTipText("Title ID: " + title.id());
+        }, () -> {
+            titleId.setText(info.titleId());
+            titleId.setToolTipText(null);
+        });
         contentType.setText(info.contentTypeName());
         packageSize.setText(String.format(Locale.ROOT, "%,d bytes", info.packageSize()));
         setValidation(headerStatus, info.headerHashValid());
@@ -253,7 +263,7 @@ public final class GameSaveEditorPanel extends JPanel {
         return panel;
     }
 
-    private static void addField(JPanel panel, int row, String label, java.awt.Component value) {
+    private static void addField(JPanel panel, int row, String label, java.awt.Component value, boolean flexible) {
         GridBagConstraints c = new GridBagConstraints();
         c.insets = new Insets(4, 6, 4, 6);
         c.gridy = row;
@@ -261,9 +271,14 @@ public final class GameSaveEditorPanel extends JPanel {
         c.anchor = GridBagConstraints.WEST;
         panel.add(new JLabel(label), c);
         c.gridx = 1;
-        c.weightx = 1;
-        c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.WEST;
+        c.weightx = flexible ? 1 : 0;
+        c.fill = flexible ? GridBagConstraints.HORIZONTAL : GridBagConstraints.NONE;
         panel.add(value, c);
+    }
+
+    private static void lockPreferredWidth(JPanel panel) {
+        panel.setMaximumSize(panel.getPreferredSize());
     }
 
     private static JTextField hexField(int digits, int columns) {
