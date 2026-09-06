@@ -1,6 +1,6 @@
 # OpenRTM
 
-OpenRTM is a Linux-focused RTM tool for working with a modified Xbox 360 over your local network, written in Java. It can show console information, send basic console commands, read and write memory, transfer files and folders, work with Xbox ISO files, and reassign game saves.
+OpenRTM is a Linux-focused tool for working with a modified Xbox 360 over your local network. It can show console information, send console commands, debug running titles, transfer files and folders, organize installed content, inspect Xbox 360 packages, work with Xbox ISO files, and move game saves between profiles.
 
 OpenRTM is intended for RGH, JTAG, and BadUpdate/aBadAvatar consoles. Only use it with game backups and files that you legally own.
 
@@ -106,13 +106,37 @@ You can also create a console folder or delete the selected console item. Deleti
 
 ### Content folder names
 
-Inside `Hdd:\Content`, Xbox 360 profile folders contain subfolders named with title IDs. OpenRTM shows a known game or application name in place of the raw title ID. The same conversion is used for the shared `0000000000000000` folder.
+Inside `Hdd:\Content`, Xbox 360 profile folders contain subfolders named with title IDs. OpenRTM shows a known game or application name in place of the raw title ID. The same conversion is used for the shared `0000000000000000` folder. Content type folders are also shown with names such as Saved Game, Marketplace Content, and Title Update.
 
 The console folder is not renamed. Hover over or click the **ID** button beside a converted name to see the real folder name.
 
+## Content Library
+
+The Content Library reads packages stored under `Hdd:\Content` and groups the important details into a table. It shows whether an item belongs to shared content or a profile, the game or application name, the content type, file name, and size.
+
+Click **Refresh Library** after connecting. Select an item and click **Show Selected Path** to see its exact owner, title ID, content type folder, and console path.
+
+To install a package:
+
+1. Click **Install Packages**.
+2. Select one or more Xbox 360 content packages.
+3. Wait while OpenRTM reads each package and creates its proper path under `Hdd:\Content`.
+
+Existing packages with the same name are verified. Matching packages are left alone, while incomplete or corrupt copies are repaired. Use the Game Saves page for offline profile reassignment.
+
+## Package Manager
+
+The Package Manager opens CON, LIVE, and PIRS Xbox 360 packages. It shows package metadata, assignment IDs, header status, thumbnails, the suggested console folder, and the files stored inside an STFS package.
+
+CON packages can be edited and re-signed. You can change their display text, title ID, profile ID, console ID, device ID, and images. Click **Save, Rehash & Resign** to update the loaded file or **Save As** to create another copy. A backup is enabled by default when replacing the loaded file.
+
+LIVE and PIRS packages can be inspected and have their internal files extracted, but they cannot be edited because their original signing keys are not available.
+
+To extract a file from a package, select it in the Package Files table and click **Extract Selected File**.
+
 ## ISO Extractor
 
-The ISO Extractor page includes the bundled `extract-xiso` tool. It currently requires 64-bit Linux.
+The ISO Extractor page includes the bundled `extract-xiso` tool. It requires 64-bit Linux. On other operating systems, the page is locked and shows a Linux requirement message.
 
 Choose an operation from the list:
 
@@ -130,19 +154,12 @@ Keep an untouched copy of an ISO until you have tested the extracted or rewritte
 [extract-xiso](https://github.com/XboxDev/extract-xiso/tree/master) itself is copyright (c) in@fishtank.com, and is licensed under a [slightly
 modified version of the Berkeley Software License](https://github.com/XboxDev/extract-xiso/blob/master/LICENSE.TXT). 
 
-## Game Save Editor
+## Game Saves
 
-The Game Save Editor changes the profile, console, and device assignment stored in an Xbox 360 game-save package. It then updates the package hashes and signature.
+Open a downloaded save to view its current profile, console, and device IDs. Enter your own IDs, then save it in place or to another file. After the save is rehashed and re-signed, OpenRTM asks whether you want to keep those IDs as a reusable profile. If you do, enter a short label. Using the profile's gamertag makes it easy to recognize later.
 
-1. Click **Browse** and select a game save.
-2. Click **Open** if the file was entered manually.
-3. Review the package type, game title, size, header status, and signature status.
-4. Enter the new Profile ID, Console ID, and Device ID.
-5. Click **Save, Rehash & Resign** to update the original file, or click **Save As** to create a separate file.
+Loading another save always shows that save's original IDs. To replace them with a saved set, choose a label from the **Profiles** dropdown. The three ID fields update immediately.
 
-The Profile ID must contain 16 hexadecimal characters. The Console ID must contain 10, and the Device ID must contain 40. Leaving one of these boxes empty clears that assignment.
+## Platform
 
-**Create .bak backup** is enabled by default when replacing the original file. Leave it enabled unless you already have a separate copy. After saving, OpenRTM checks the new header and signature before reporting success.
-
-##
-#### This project was developed on and for Linux!
+OpenRTM was developed on and for Linux. Most features use Java and can work on other platforms, but the bundled ISO tool is a 64-bit Linux program.

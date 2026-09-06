@@ -6,7 +6,9 @@ import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JFileChooser;
+import javax.swing.JLayer;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -14,19 +16,32 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.plaf.LayerUI;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Container;
 import java.awt.FlowLayout;
+import java.awt.Font;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.awt.image.ConvolveOp;
+import java.awt.image.Kernel;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.Locale;
 
 public final class IsoToolPanel extends JPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
+	private static final boolean LINUX = System.getProperty("os.name", "")
+		.toLowerCase(Locale.ROOT).contains("linux");
 
 	private final TaskRunner tasks;
 	private final ExtractXisoService tool = new ExtractXisoService();
@@ -49,10 +64,11 @@ public final class IsoToolPanel extends JPanel
 		this.tasks = tasks;
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 
-		add(controls(), BorderLayout.NORTH);
+		JPanel content = new JPanel(new BorderLayout(10, 10));
+		content.add(controls(), BorderLayout.NORTH);
 		log.setEditable(false);
 		log.setLineWrap(false);
-		add(new JScrollPane(log), BorderLayout.CENTER);
+		content.add(new JScrollPane(log), BorderLayout.CENTER);
 
 		mode.addActionListener(e -> updateMode());
 		run.addActionListener(e -> runTool());
@@ -62,6 +78,15 @@ public final class IsoToolPanel extends JPanel
 		});
 		cancel.setEnabled(false);
 		updateMode();
+		if (LINUX)
+		{
+			add(content, BorderLayout.CENTER);
+		}
+		else
+		{
+			setEnabledRecursively(content, false);
+			add(new JLayer<>(content, new LinuxRequiredLayer()), BorderLayout.CENTER);
+		}
 	}
 
 	private JPanel controls()
@@ -187,6 +212,10 @@ public final class IsoToolPanel extends JPanel
 
 	private void runTool()
 	{
+		if (!LINUX)
+		{
+			return;
+		}
 		ExtractXisoService.Mode requestedMode = selectedMode();
 		String requestedSource = source.getText();
 		String requestedOutput = output.getText();
@@ -250,5 +279,60 @@ public final class IsoToolPanel extends JPanel
 	private static Path path(String value)
 	{
 		return value == null || value.isBlank() ? null : Path.of(value.trim()).toAbsolutePath().normalize();
+	}
+
+	private static void setEnabledRecursively(Component component, boolean enabled)
+	{
+		component.setEnabled(enabled);
+		if (component instanceof Container container)
+		{
+			for (Component child : container.getComponents())
+			{
+				setEnabledRecursively(child, enabled);
+			}
+		}
+	}
+
+	private static final class LinuxRequiredLayer extends LayerUI<JComponent>
+	{
+		private static final float[] BLUR = {
+			0.04f, 0.04f, 0.04f, 0.04f, 0.04f,
+			0.04f, 0.04f, 0.04f, 0.04f, 0.04f,
+			0.04f, 0.04f, 0.04f, 0.04f, 0.04f,
+			0.04f, 0.04f, 0.04f, 0.04f, 0.04f,
+			0.04f, 0.04f, 0.04f, 0.04f, 0.04f
+		};
+
+		@Override
+		public void paint(Graphics graphics, JComponent component)
+		{
+			int width = component.getWidth();
+			int height = component.getHeight();
+			if (width <= 0 || height <= 0)
+			{
+				return;
+			}
+			BufferedImage source = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+			Graphics2D offscreen = source.createGraphics();
+			offscreen.setClip(graphics.getClip());
+			super.paint(offscreen, component);
+			offscreen.dispose();
+
+			BufferedImage blurred = new ConvolveOp(new Kernel(5, 5, BLUR), ConvolveOp.EDGE_NO_OP, null)
+				.filter(source, null);
+			Graphics2D output = (Graphics2D) graphics.create();
+			output.drawImage(blurred, 0, 0, null);
+			output.setColor(new Color(20, 22, 25, 150));
+			output.fillRect(0, 0, width, height);
+			output.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+				RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+			output.setFont(component.getFont().deriveFont(Font.BOLD, 22f));
+			output.setColor(Color.WHITE);
+			String message = "This feature requires Linux!";
+			int x = Math.max(12, (width - output.getFontMetrics().stringWidth(message)) / 2);
+			int y = height / 2 + output.getFontMetrics().getAscent() / 2;
+			output.drawString(message, x, y);
+			output.dispose();
+		}
 	}
 }

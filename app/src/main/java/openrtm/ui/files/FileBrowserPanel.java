@@ -1,6 +1,7 @@
 package openrtm.ui.files;
 
 import openrtm.console.ConsoleService;
+import openrtm.stfs.PackageService;
 import openrtm.titleids.TitleIds;
 import openrtm.ui.TaskRunner;
 
@@ -55,6 +56,8 @@ public final class FileBrowserPanel extends JPanel
 	private static final Color ACCENT = new Color(91, 141, 239);
 	private static final Pattern CONTENT_OWNER_PATH = Pattern.compile(
 		"(?i)^Hdd:\\\\Content\\\\[0-9A-F]{16}\\\\?$");
+	private static final Pattern CONTENT_TITLE_PATH = Pattern.compile(
+		"(?i)^Hdd:\\\\Content\\\\[0-9A-F]{16}\\\\[0-9A-F]{8}\\\\?$");
 
 	private final ConsoleService service;
 	private final TaskRunner tasks;
@@ -341,11 +344,11 @@ public final class FileBrowserPanel extends JPanel
 		List<DefaultMutableTreeNode> children = new ArrayList<>();
 		for (ConsoleService.FileEntry entry : entries)
 		{
-			Optional<TitleIds.Title> title = contentTitle(parentPath, entry.name(), entry.directory());
-			String displayName = title.map(TitleIds.Title::name).orElseGet(() -> displayRemoteName(entry.name()));
+			Optional<DisplayAlias> alias = contentAlias(parentPath, entry.name(), entry.directory());
+			String displayName = alias.map(DisplayAlias::displayName).orElseGet(() -> displayRemoteName(entry.name()));
 			String path = childRemotePath(parentPath, entry.name());
-			String titleId = title.map(TitleIds.Title::id).orElse(null);
-			children.add(newNode(BrowserNode.remote(displayName, path, entry.directory(), entry.size(), titleId)));
+			String actualName = alias.map(DisplayAlias::actualName).orElse(null);
+			children.add(newNode(BrowserNode.remote(displayName, path, entry.directory(), entry.size(), actualName)));
 		}
 		return children;
 	}
@@ -363,7 +366,7 @@ public final class FileBrowserPanel extends JPanel
 		}
 		DefaultMutableTreeNode node = treeNode(path);
 		BrowserNode entry = browserNode(node);
-		if (entry == null || entry.titleId() == null)
+		if (entry == null || entry.actualName() == null)
 		{
 			return;
 		}
@@ -375,7 +378,7 @@ public final class FileBrowserPanel extends JPanel
 		}
 
 		event.consume();
-		JOptionPane.showMessageDialog(this, entry.titleId(), "Actual folder name", JOptionPane.INFORMATION_MESSAGE);
+		JOptionPane.showMessageDialog(this, entry.actualName(), "Actual folder name", JOptionPane.INFORMATION_MESSAGE);
 	}
 
 	private void replaceChildren(DefaultTreeModel model, DefaultMutableTreeNode parent, BrowserNode parentEntry, List<DefaultMutableTreeNode> children)
@@ -724,9 +727,38 @@ public final class FileBrowserPanel extends JPanel
 
 	private static String remoteDisplayName(String parentPath, ConsoleService.FileEntry entry)
 	{
-		return contentTitle(parentPath, entry.name(), entry.directory())
-			.map(TitleIds.Title::name)
+		return contentAlias(parentPath, entry.name(), entry.directory())
+			.map(DisplayAlias::displayName)
 			.orElseGet(() -> displayRemoteName(entry.name()));
+	}
+
+	private static Optional<DisplayAlias> contentAlias(String parentPath, String childName, boolean directory)
+	{
+		if (!directory)
+		{
+			return Optional.empty();
+		}
+		String parent = parentPath == null ? "" : parentPath.trim().replace('/', '\\');
+		String actual = displayRemoteName(childName).toUpperCase(Locale.ROOT);
+		if (CONTENT_OWNER_PATH.matcher(parent).matches())
+		{
+			return TitleIds.find(actual).map(title -> new DisplayAlias(title.name(), title.id()));
+		}
+		if (CONTENT_TITLE_PATH.matcher(parent).matches() && actual.matches("[0-9A-F]{8}"))
+		{
+			int type = (int) Long.parseLong(actual, 16);
+			String name = PackageService.contentTypeName(type);
+			if (!name.startsWith("Unknown"))
+			{
+				return Optional.of(new DisplayAlias(name, actual));
+			}
+		}
+		return Optional.empty();
+	}
+
+	static Optional<String> contentDisplayName(String parentPath, String childName, boolean directory)
+	{
+		return contentAlias(parentPath, childName, directory).map(DisplayAlias::displayName);
 	}
 
 	static Optional<TitleIds.Title> contentTitle(String parentPath, String childName, boolean directory)
@@ -743,6 +775,10 @@ public final class FileBrowserPanel extends JPanel
 		return TitleIds.find(displayRemoteName(childName));
 	}
 
+	private record DisplayAlias(String displayName, String actualName)
+	{
+	}
+
 	private static String displayRemoteName(String path)
 	{
 		String normalized = path == null ? "" : path.trim().replace('/', '\\');
@@ -755,7 +791,7 @@ public final class FileBrowserPanel extends JPanel
 		private static final int ID_BUTTON_WIDTH = 34;
 		private final DefaultTreeCellRenderer label = new DefaultTreeCellRenderer();
 		private final JButton idButton = new JButton("ID");
-		private String titleId;
+		private String actualName;
 
 		private BrowserTreeCellRenderer()
 		{
@@ -790,10 +826,10 @@ public final class FileBrowserPanel extends JPanel
 
 			removeAll();
 			add(label, BorderLayout.CENTER);
-			titleId = entry == null ? null : entry.titleId();
-			if (titleId != null)
+			actualName = entry == null ? null : entry.actualName();
+			if (actualName != null)
 			{
-				idButton.setToolTipText("Actual folder: " + titleId);
+				idButton.setToolTipText("Actual folder: " + actualName);
 				add(idButton, BorderLayout.EAST);
 			}
 			setBackground(selected
@@ -805,9 +841,9 @@ public final class FileBrowserPanel extends JPanel
 		@Override
 		public String getToolTipText(MouseEvent event)
 		{
-			if (titleId != null && event.getX() >= getWidth() - ID_BUTTON_WIDTH)
+			if (actualName != null && event.getX() >= getWidth() - ID_BUTTON_WIDTH)
 			{
-				return "Actual folder: " + titleId;
+				return "Actual folder: " + actualName;
 			}
 			return null;
 		}
@@ -821,11 +857,11 @@ public final class FileBrowserPanel extends JPanel
 		private final String remotePath;
 		private final boolean directory;
 		private final long size;
-		private final String titleId;
+		private final String actualName;
 		private boolean loaded;
 
 		private BrowserNode(NodeType type, String name, Path localPath, String remotePath,
-		                    boolean directory, long size, boolean loaded, String titleId)
+		                    boolean directory, long size, boolean loaded, String actualName)
 		{
 			this.type = type;
 			this.name = name;
@@ -834,7 +870,7 @@ public final class FileBrowserPanel extends JPanel
 			this.directory = directory;
 			this.size = size;
 			this.loaded = loaded;
-			this.titleId = titleId;
+			this.actualName = actualName;
 		}
 
 		static BrowserNode localRoot()
@@ -857,10 +893,10 @@ public final class FileBrowserPanel extends JPanel
 			return remote(name, path, directory, size, null);
 		}
 
-		static BrowserNode remote(String name, String path, boolean directory, long size, String titleId)
+		static BrowserNode remote(String name, String path, boolean directory, long size, String actualName)
 		{
 			return new BrowserNode(NodeType.REMOTE_ENTRY, name, null, path, directory, size,
-				!directory, titleId);
+				!directory, actualName);
 		}
 
 		static BrowserNode placeholder(String name)
@@ -913,9 +949,9 @@ public final class FileBrowserPanel extends JPanel
 			return remotePath;
 		}
 
-		String titleId()
+		String actualName()
 		{
-			return titleId;
+			return actualName;
 		}
 
 		boolean loadableDirectory()

@@ -366,7 +366,7 @@ public final class JRPC
 				}
 
 				byte[] hdr = readN(4);
-				long length = readUnsignedIntLittleEndian(hdr);
+				long length = readUnsignedIntBigEndian(hdr);
 				Path parent = localPath.getParent();
 				if (parent != null)
 				{
@@ -419,7 +419,7 @@ public final class JRPC
 					throw new ComException(UIntToInt(0x82DA0007L), "getfile failed: " + first);
 				}
 
-				long remoteLength = readUnsignedIntLittleEndian(readN(4));
+				long remoteLength = readUnsignedIntBigEndian(readN(4));
 				long localLength = Files.size(localPath);
 				if (remoteLength != localLength)
 				{
@@ -464,6 +464,66 @@ public final class JRPC
 			}
 		}
 
+		public synchronized long FindFirstMismatch(Path localPath, String remotePath, LongConsumer progress) throws IOException
+		{
+			ensureConnected();
+			int previousTimeout = useSocketTimeout(transferTimeout());
+			try
+			{
+				writeLine("getfile name=" + quoteXbdm(remotePath));
+				String first = readAsciiLine();
+				if (statusCode(first) != 203)
+				{
+					throw new ComException(UIntToInt(0x82DA0007L), "getfile failed: " + first);
+				}
+
+				long remoteLength = readUnsignedIntBigEndian(readN(4));
+				long localLength = Files.size(localPath);
+				long mismatch = -1;
+				long compared = 0;
+				try (InputStream local = Files.newInputStream(localPath))
+				{
+					byte[] localBuffer = new byte[64 * 1024];
+					byte[] remoteBuffer = new byte[64 * 1024];
+					long remaining = remoteLength;
+					while (remaining > 0)
+					{
+						int chunk = (int) Math.min(remoteBuffer.length, remaining);
+						readFully(bin, remoteBuffer, chunk, "console file");
+						int localChunk = (int) Math.min(chunk, Math.max(0, localLength - compared));
+						if (localChunk > 0)
+						{
+							readFully(local, localBuffer, localChunk, "local file");
+						}
+						if (mismatch < 0)
+						{
+							for (int i = 0; i < chunk; i++)
+							{
+								if (i >= localChunk || localBuffer[i] != remoteBuffer[i])
+								{
+									mismatch = compared + i;
+									break;
+								}
+							}
+						}
+						remaining -= chunk;
+						compared += chunk;
+						progress.accept(compared);
+					}
+				}
+				return mismatch;
+			}
+			catch (IOException e)
+			{
+				closeQuietly();
+				throw e;
+			}
+			finally
+			{
+				restoreSocketTimeout(previousTimeout);
+			}
+		}
+
 		public synchronized byte[] ReadFilePartial(String remotePath, long offset, int length) throws IOException
 		{
 			ensureConnected();
@@ -477,10 +537,10 @@ public final class JRPC
 					throw new ComException(UIntToInt(0x82DA0007L), "partial getfile failed: " + first);
 				}
 				byte[] hdr = readN(4);
-				long n = readUnsignedIntLittleEndian(hdr);
+				long n = readUnsignedIntBigEndian(hdr);
 				if (n > length)
 				{
-					throw new IOException("Console returned more data than requested");
+					throw new IOException("Console ignored the partial getfile range");
 				}
 				return readN((int) n);
 			}
@@ -690,12 +750,16 @@ public final class JRPC
 			}
 		}
 
-		private static long readUnsignedIntLittleEndian(byte[] value)
+		static long readUnsignedIntBigEndian(byte[] value)
 		{
-			return (value[0] & 0xFFL)
-				| ((value[1] & 0xFFL) << 8)
-				| ((value[2] & 0xFFL) << 16)
-				| ((value[3] & 0xFFL) << 24);
+			if (value == null || value.length != 4)
+			{
+				throw new IllegalArgumentException("Expected a four-byte unsigned integer");
+			}
+			return ((value[0] & 0xFFL) << 24)
+				| ((value[1] & 0xFFL) << 16)
+				| ((value[2] & 0xFFL) << 8)
+				| (value[3] & 0xFFL);
 		}
 
 		private static String toHex(byte[] b)

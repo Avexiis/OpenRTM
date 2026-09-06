@@ -5,8 +5,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.Arrays;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongConsumer;
 
 final class ResumableUploader
 {
@@ -26,6 +26,7 @@ final class ResumableUploader
 			total = local.size();
 			long verified = 0;
 			int reconnectAttempt = 0;
+			int verificationFailures = 0;
 			boolean reconnectNeeded = false;
 
 			while (true)
@@ -66,12 +67,23 @@ final class ResumableUploader
 						present = total;
 					}
 
-					if (present < verified)
-					{
-						verified = alignedCheckpoint(present);
-					}
 					progress.update(verified, total, "Verifying " + present + " bytes already on console");
-					verified = verifyRange(local, remote, remotePath, verified, present, total, cancelled, progress);
+					long mismatch = present == 0 ? -1 : remote.firstMismatch(localPath, remotePath,
+						compared -> progress.update(Math.min(compared, total), total, "Checking console data"));
+					if (mismatch >= 0)
+					{
+						verified = alignedCheckpoint(mismatch);
+						progress.update(verified, total, "Repairing corrupt data at byte " + mismatch);
+					}
+					else
+					{
+						verified = present;
+					}
+					if (mismatch < 0 && present == total)
+					{
+						progress.update(total, total, "Existing console file verified");
+						return;
+					}
 					verified = uploadRange(local, remote, remotePath, verified, total, cancelled, progress);
 
 					remote.resize(remotePath, total, false);
@@ -80,8 +92,18 @@ final class ResumableUploader
 					{
 						throw new RemoteException(true, "Console reports " + finalSize + " of " + total + " bytes", null);
 					}
-					progress.update(total, total, "Upload verified");
-					return;
+					progress.update(total, total, "Verifying completed upload");
+					if (total == 0 || remote.matches(localPath, remotePath,
+						compared -> progress.update(Math.min(compared, total), total, "Verifying completed upload")))
+					{
+						progress.update(total, total, "Upload verified");
+						return;
+					}
+					if (++verificationFailures >= 2)
+					{
+						throw new RemoteException(false, "Console data remains corrupt after repair", null);
+					}
+					progress.update(0, total, "Upload verification found corrupt data; repairing");
 				}
 				catch (RemoteException failure)
 				{
@@ -95,28 +117,6 @@ final class ResumableUploader
 		}
 	}
 
-	private static long verifyRange(FileChannel local, RemoteFile remote, String remotePath,
-	                                long start, long end, long total, BooleanSupplier cancelled,
-	                                Progress progress) throws IOException, RemoteException
-	{
-		long offset = start;
-		while (offset < end)
-		{
-			checkCancelled(cancelled);
-			int length = (int) Math.min(CHUNK_SIZE, end - offset);
-			byte[] expected = readLocal(local, offset, length);
-			byte[] actual = remote.read(remotePath, offset, length);
-			if (!Arrays.equals(expected, actual))
-			{
-				progress.update(offset, total, "Repairing corrupt data at byte " + offset);
-				writeAndVerify(remote, remotePath, offset, expected);
-			}
-			offset += length;
-			progress.update(offset, total, "Verified existing console data");
-		}
-		return offset;
-	}
-
 	private static long uploadRange(FileChannel local, RemoteFile remote, String remotePath,
 	                                long start, long total, BooleanSupplier cancelled,
 	                                Progress progress) throws IOException, RemoteException
@@ -127,29 +127,11 @@ final class ResumableUploader
 			checkCancelled(cancelled);
 			int length = (int) Math.min(CHUNK_SIZE, total - offset);
 			byte[] data = readLocal(local, offset, length);
-			writeAndVerify(remote, remotePath, offset, data);
+			remote.write(remotePath, offset, data);
 			offset += length;
 			progress.update(offset, total, "Uploading to console");
 		}
 		return offset;
-	}
-
-	private static void writeAndVerify(RemoteFile remote, String remotePath, long offset, byte[] data)
-		throws RemoteException
-	{
-		remote.write(remotePath, offset, data);
-		byte[] actual = remote.read(remotePath, offset, data.length);
-		if (Arrays.equals(data, actual))
-		{
-			return;
-		}
-
-		remote.write(remotePath, offset, data);
-		actual = remote.read(remotePath, offset, data.length);
-		if (!Arrays.equals(data, actual))
-		{
-			throw new RemoteException(false, "Console data remains corrupt at byte " + offset, null);
-		}
 	}
 
 	private static byte[] readLocal(FileChannel local, long offset, int length) throws IOException
@@ -217,11 +199,13 @@ final class ResumableUploader
 	{
 		long size(String path) throws RemoteException;
 
-		byte[] read(String path, long offset, int length) throws RemoteException;
+		long firstMismatch(Path localPath, String path, LongConsumer progress) throws RemoteException;
 
 		void write(String path, long offset, byte[] data) throws RemoteException;
 
 		void resize(String path, long size, boolean create) throws RemoteException;
+
+		boolean matches(Path localPath, String path, LongConsumer progress) throws RemoteException;
 
 		void reconnect() throws RemoteException;
 	}

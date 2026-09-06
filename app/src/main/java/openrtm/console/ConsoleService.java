@@ -494,6 +494,27 @@ public final class ConsoleService
 		}
 	}
 
+	public synchronized void ensureDirectory(String remotePath)
+	{
+		String normalized = remotePath == null ? "" : remotePath.trim().replace('/', '\\');
+		int rootEnd = normalized.indexOf("\\");
+		if (rootEnd < 0 || rootEnd == 0 || normalized.charAt(rootEnd - 1) != ':')
+		{
+			throw new IllegalArgumentException("Console path must include a drive and folder");
+		}
+		String current = normalized.substring(0, rootEnd + 1);
+		for (String part : normalized.substring(rootEnd + 1).split("\\\\"))
+		{
+			if (part.isBlank())
+			{
+				continue;
+			}
+			current += part;
+			makeDirectory(current);
+			current += "\\";
+		}
+	}
+
 	public synchronized void deletePath(String remotePath, boolean directory)
 	{
 		String response = rawCommand("delete name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath)
@@ -684,9 +705,10 @@ public final class ConsoleService
 			}
 
 			@Override
-			public byte[] read(String path, long offset, int length) throws ResumableUploader.RemoteException
+			public long firstMismatch(Path localPath, String path, java.util.function.LongConsumer progress)
+				throws ResumableUploader.RemoteException
 			{
-				return remoteCall(() -> requireXbdm().ReadFilePartial(path, offset, length));
+				return remoteCall(() -> requireXbdm().FindFirstMismatch(localPath, path, progress));
 			}
 
 			@Override
@@ -699,6 +721,13 @@ public final class ConsoleService
 			public void resize(String path, long size, boolean create) throws ResumableUploader.RemoteException
 			{
 				remoteRun(() -> requireXbdm().SetFileSize(path, size, create, create));
+			}
+
+			@Override
+			public boolean matches(Path localPath, String path, java.util.function.LongConsumer progress)
+				throws ResumableUploader.RemoteException
+			{
+				return remoteCall(() -> requireXbdm().FileMatches(localPath, path, progress));
 			}
 
 			@Override
@@ -823,7 +852,8 @@ public final class ConsoleService
 	private static ResumableUploader.RemoteException remoteFailure(Exception failure)
 	{
 		String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
-		return new ResumableUploader.RemoteException(isRetryableRemoteFailure(failure), message, failure);
+		boolean retryable = isRetryableRemoteFailure(failure) && !isUnsupportedPartialFileCommand(failure);
+		return new ResumableUploader.RemoteException(retryable, message, failure);
 	}
 
 	static boolean isRetryableRemoteFailure(Exception failure)
@@ -856,7 +886,8 @@ public final class ConsoleService
 		for (Throwable cause = failure; cause != null; cause = cause.getCause())
 		{
 			String message = cause.getMessage();
-			if (message != null && message.toLowerCase(Locale.ROOT).contains("407- unknown command"))
+			if (message != null && (message.toLowerCase(Locale.ROOT).contains("407- unknown command")
+				|| message.toLowerCase(Locale.ROOT).contains("ignored the partial getfile range")))
 			{
 				return true;
 			}

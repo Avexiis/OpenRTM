@@ -1,13 +1,17 @@
 package openrtm.ui;
 
+import openrtm.config.GameSaveAssignmentStore;
+import openrtm.config.GameSaveAssignmentStore.SavedAssignment;
 import openrtm.stfs.GameSaveService;
 import openrtm.titleids.TitleIds;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
@@ -35,6 +39,7 @@ public final class GameSaveEditorPanel extends JPanel
 	private static final Color WARN = new Color(210, 157, 73);
 
 	private final TaskRunner tasks;
+	private final GameSaveAssignmentStore assignments;
 	private final GameSaveService service = new GameSaveService();
 	private final JTextField source = new JTextField(52);
 	private final JTextField profileId = hexField(16, 20);
@@ -47,6 +52,7 @@ public final class GameSaveEditorPanel extends JPanel
 	private final JLabel signatureStatus = new JLabel("-");
 	private final JLabel operationStatus = new JLabel("No game save loaded");
 	private final JCheckBox createBackup = new JCheckBox("Create .bak backup", true);
+	private final JComboBox<SavedAssignment> profiles = new JComboBox<>();
 	private final JButton open = new JButton("Open");
 	private final JButton save = new JButton("Save, Rehash & Resign");
 	private final JButton saveAs = new JButton("Save As");
@@ -56,6 +62,7 @@ public final class GameSaveEditorPanel extends JPanel
 	{
 		super(new BorderLayout(10, 10));
 		this.tasks = tasks;
+		assignments = new GameSaveAssignmentStore();
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 
 		JPanel content = new JPanel();
@@ -68,6 +75,8 @@ public final class GameSaveEditorPanel extends JPanel
 		open.addActionListener(e -> openFromField());
 		save.addActionListener(e -> save(loadedFile, true));
 		saveAs.addActionListener(e -> chooseSaveAs());
+		profiles.addActionListener(e -> useSelectedProfile());
+		refreshProfiles(null);
 		setEditorEnabled(false);
 	}
 
@@ -107,6 +116,12 @@ public final class GameSaveEditorPanel extends JPanel
 		addField(fields, 2, "Device ID", deviceId, false);
 		lockPreferredWidth(fields);
 		panel.add(fields);
+
+		JPanel saved = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
+		saved.setAlignmentX(LEFT_ALIGNMENT);
+		saved.add(new JLabel("Profiles"));
+		saved.add(profiles);
+		panel.add(saved);
 
 		JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
 		actions.setAlignmentX(LEFT_ALIGNMENT);
@@ -198,8 +213,7 @@ public final class GameSaveEditorPanel extends JPanel
 			return;
 		}
 		Path input = loadedFile;
-		GameSaveService.Assignment assignment = new GameSaveService.Assignment(
-			profileId.getText(), consoleId.getText(), deviceId.getText());
+		GameSaveService.Assignment assignment = currentAssignment();
 		boolean requestedBackup = backup && createBackup.isSelected();
 		setBusy(true, "Saving...");
 		tasks.run("rehash and resign game save", () -> {
@@ -210,7 +224,10 @@ public final class GameSaveEditorPanel extends JPanel
 				String message = result.backup() == null
 					? "Saved and verified"
 					: "Saved and verified; backup: " + result.backup().getFileName();
-				SwingUtilities.invokeLater(() -> showInfo(result.info(), message));
+				SwingUtilities.invokeLater(() -> {
+					showInfo(result.info(), message);
+					offerToSaveProfile(assignment);
+				});
 			}
 			catch (Exception failure)
 			{
@@ -245,6 +262,93 @@ public final class GameSaveEditorPanel extends JPanel
 		operationStatus.setText(message);
 		operationStatus.setForeground(OK);
 		setEditorEnabled(true);
+		profiles.setSelectedItem(null);
+	}
+
+	private GameSaveService.Assignment currentAssignment()
+	{
+		return new GameSaveService.Assignment(profileId.getText(), consoleId.getText(), deviceId.getText());
+	}
+
+	private void offerToSaveProfile(GameSaveService.Assignment assignment)
+	{
+		if (assignments.find(assignment).isPresent())
+		{
+			return;
+		}
+		if (JOptionPane.showConfirmDialog(this, "Save these IDs as a profile for reuse?",
+			"Save Profile", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION)
+		{
+			return;
+		}
+		String suggested = "";
+		try
+		{
+			suggested = assignments.findByProfileId(assignment.profileId())
+				.map(SavedAssignment::label).orElse("");
+		}
+		catch (IllegalArgumentException ignored)
+		{
+		}
+		String label = (String) JOptionPane.showInputDialog(this,
+			"Enter a profile label. Using the gamertag is recommended.", "Save Profile", JOptionPane.PLAIN_MESSAGE,
+			null, null, suggested);
+		if (label == null)
+		{
+			return;
+		}
+		try
+		{
+			SavedAssignment saved = assignments.save(label, assignment);
+			refreshProfiles(saved.profileId());
+			operationStatus.setText("Profile saved as " + saved.label());
+			operationStatus.setForeground(OK);
+		}
+		catch (RuntimeException failure)
+		{
+			JOptionPane.showMessageDialog(this, failure.getMessage(), "Save Profile",
+				JOptionPane.WARNING_MESSAGE);
+		}
+	}
+
+	private void useSelectedProfile()
+	{
+		SavedAssignment selected = (SavedAssignment) profiles.getSelectedItem();
+		if (selected == null || loadedFile == null)
+		{
+			return;
+		}
+		profileId.setText(selected.profileId());
+		consoleId.setText(selected.consoleId());
+		deviceId.setText(selected.deviceId());
+		operationStatus.setText("Using profile " + selected.label());
+		operationStatus.setForeground(OK);
+	}
+
+	private void refreshProfiles(String profileToSelect)
+	{
+		profiles.removeAllItems();
+		assignments.all().forEach(profiles::addItem);
+		selectProfile(profileToSelect);
+	}
+
+	private void selectProfile(String profileToSelect)
+	{
+		if (profileToSelect == null)
+		{
+			profiles.setSelectedItem(null);
+			return;
+		}
+		for (int index = 0; index < profiles.getItemCount(); index++)
+		{
+			SavedAssignment item = profiles.getItemAt(index);
+			if (item.profileId().equalsIgnoreCase(profileToSelect))
+			{
+				profiles.setSelectedIndex(index);
+				return;
+			}
+		}
+		profiles.setSelectedItem(null);
 	}
 
 	private void showFailure(String message)
@@ -262,6 +366,7 @@ public final class GameSaveEditorPanel extends JPanel
 		consoleId.setEnabled(!busy && loadedFile != null);
 		deviceId.setEnabled(!busy && loadedFile != null);
 		createBackup.setEnabled(!busy && loadedFile != null);
+		profiles.setEnabled(!busy && loadedFile != null);
 		if (message != null)
 		{
 			operationStatus.setText(message);
@@ -277,6 +382,7 @@ public final class GameSaveEditorPanel extends JPanel
 		consoleId.setEnabled(enabled);
 		deviceId.setEnabled(enabled);
 		createBackup.setEnabled(enabled);
+		profiles.setEnabled(enabled);
 	}
 
 	private static void setValidation(JLabel label, boolean valid)

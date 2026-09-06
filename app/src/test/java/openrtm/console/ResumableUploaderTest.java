@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.function.LongConsumer;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -77,10 +78,22 @@ class ResumableUploaderTest {
         }
 
         @Override
-        public byte[] read(String path, long offset, int length) {
-            int start = Math.toIntExact(offset);
-            return Arrays.copyOfRange(data, start, Math.min(data.length, start + length));
-        }
+		public long firstMismatch(Path localPath, String path, LongConsumer progress)
+				throws ResumableUploader.RemoteException {
+			try {
+				byte[] local = Files.readAllBytes(localPath);
+				for (int index = 0; index < data.length; index++) {
+					if (index >= local.length || data[index] != local[index]) {
+						progress.accept(data.length);
+						return index;
+					}
+				}
+				progress.accept(data.length);
+				return -1;
+			} catch (IOException failure) {
+				throw new ResumableUploader.RemoteException(false, failure.getMessage(), failure);
+			}
+		}
 
         @Override
         public void write(String path, long offset, byte[] bytes) throws ResumableUploader.RemoteException {
@@ -98,9 +111,21 @@ class ResumableUploaderTest {
         }
 
         @Override
-        public void resize(String path, long size, boolean create) {
-            data = Arrays.copyOf(data, Math.toIntExact(size));
-        }
+		public void resize(String path, long size, boolean create) {
+			data = Arrays.copyOf(data, Math.toIntExact(size));
+		}
+
+		@Override
+		public boolean matches(Path localPath, String path, LongConsumer progress)
+				throws ResumableUploader.RemoteException {
+			try {
+				byte[] local = Files.readAllBytes(localPath);
+				progress.accept(data.length);
+				return Arrays.equals(local, data);
+			} catch (IOException failure) {
+				throw new ResumableUploader.RemoteException(false, failure.getMessage(), failure);
+			}
+		}
 
         @Override
         public void reconnect() {
