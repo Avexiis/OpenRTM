@@ -1,7 +1,9 @@
 package openrtm.ui;
 
 import com.jjrpc.JRPC;
+import openrtm.config.AppSettings;
 import openrtm.console.ConsoleService;
+import openrtm.discord.DiscordRpcService;
 import openrtm.ui.files.FileBrowserPanel;
 import openrtm.util.HexUtils;
 
@@ -52,6 +54,8 @@ public final class MainFrame extends JFrame
 	private static final Color DANGER = new Color(192, 85, 85);
 
 	private final ConsoleService service = new ConsoleService();
+	private final AppSettings settings = new AppSettings();
+	private final DiscordRpcService discordRpc = new DiscordRpcService(service);
 	private final CardLayout pages = new CardLayout();
 	private final JPanel pageDeck = new JPanel(pages);
 	private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
@@ -66,6 +70,7 @@ public final class MainFrame extends JFrame
 	});
 	private final JComboBox<String> hostField = hostCombo();
 	private final JCheckBox autoConnect = new JCheckBox("Autoconnect", service.autoConnect());
+	private final JCheckBox discordPresence = new JCheckBox("Show Current Title As Discord Rich Presence (RPC)");
 	private final JLabel status = new JLabel("Disconnected");
 	private FileBrowserPanel fileBrowserPanel;
 	private VideoCapturePanel videoCapturePanel;
@@ -94,6 +99,7 @@ public final class MainFrame extends JFrame
 		add(connectionBar(), BorderLayout.NORTH);
 		add(shell(), BorderLayout.CENTER);
 		status.setForeground(WARN);
+		configureDiscordPresence();
 
 		autoConnect.addActionListener(e -> {
 			service.autoConnect(autoConnect.isSelected());
@@ -113,6 +119,7 @@ public final class MainFrame extends JFrame
 			{
 				stopReconnect();
 				service.cancelFileTransfer();
+				discordRpc.close();
 				service.disconnect();
 				if (videoCapturePanel != null)
 				{
@@ -139,6 +146,7 @@ public final class MainFrame extends JFrame
 		disconnect.addActionListener(e -> runTask("disconnect", () -> {
 			stopReconnect();
 			service.cancelFileTransfer();
+			discordRpc.consoleDisconnected();
 			service.disconnect();
 			SwingUtilities.invokeLater(() -> setStatus("Disconnected", WARN));
 		}));
@@ -208,6 +216,11 @@ public final class MainFrame extends JFrame
 		infoSection.add(tableScroll);
 		panel.add(infoSection, BorderLayout.CENTER);
 
+		JPanel discord = section("Discord");
+		JPanel discordRow = row();
+		discordRow.add(discordPresence);
+		discord.add(discordRow);
+
 		JPanel controls = section("Console Controls");
 		JPanel grid = new JPanel(new GridLayout(0, 3, 8, 8));
 		addAction(grid, "XNotify", () -> {
@@ -223,8 +236,31 @@ public final class MainFrame extends JFrame
 		addAction(grid, "DVD Eject", () -> service.ejectDvd(true));
 		addAction(grid, "DVD Close", () -> service.ejectDvd(false));
 		controls.add(grid);
-		panel.add(controls, BorderLayout.SOUTH);
+
+		JPanel lowerSections = new JPanel();
+		lowerSections.setLayout(new BoxLayout(lowerSections, BoxLayout.Y_AXIS));
+		lowerSections.add(discord);
+		lowerSections.add(controls);
+		panel.add(lowerSections, BorderLayout.SOUTH);
 		return panel;
+	}
+
+	private void configureDiscordPresence()
+	{
+		boolean configured = discordRpc.configured();
+		discordPresence.setEnabled(configured);
+		discordPresence.setSelected(configured && settings.discordRichPresence());
+		if (!configured)
+		{
+			discordPresence.setToolTipText("Discord Rich Presence is not configured in this build");
+		}
+		discordPresence.addActionListener(e ->
+		{
+			boolean enabled = discordPresence.isSelected();
+			settings.discordRichPresence(enabled);
+			discordRpc.setEnabled(enabled);
+		});
+		discordRpc.setEnabled(discordPresence.isSelected());
 	}
 
 	private JPanel memoryPanel()
@@ -323,6 +359,7 @@ public final class MainFrame extends JFrame
 		runTask("connect", () -> {
 			try
 			{
+				discordRpc.consoleDisconnected();
 				if (!service.connect(host))
 				{
 					throw new IllegalStateException("Could not connect to " + host);
@@ -341,6 +378,7 @@ public final class MainFrame extends JFrame
 	{
 		rememberHostInCombo(host);
 		setStatus("Connected to " + host, OK);
+		discordRpc.consoleConnected();
 		if (refresh)
 		{
 			if (fileBrowserPanel != null)
@@ -370,6 +408,7 @@ public final class MainFrame extends JFrame
 		}
 
 		String host = reconnectHost;
+		discordRpc.consoleDisconnected();
 		SwingUtilities.invokeLater(() -> setStatus("Reconnecting to " + host + "...", WARN));
 		boolean connected = false;
 		try

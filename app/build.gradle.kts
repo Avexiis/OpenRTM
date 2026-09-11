@@ -20,7 +20,11 @@ dependencies {
     implementation(project(":JJRPC"))
     implementation("com.formdev:flatlaf:3.7.2")
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("io.github.cdagaming:DiscordIPC:0.11.3") {
+        exclude(group = "net.lenni0451", module = "Reflect")
+    }
     implementation("org.bytedeco:javacv:1.5.13")
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
     runtimeOnly("org.bytedeco:javacpp:1.5.13:$nativeClassifier")
     runtimeOnly("org.bytedeco:ffmpeg:8.0.1-1.5.13:$nativeClassifier")
     runtimeOnly("org.bytedeco:openblas:0.3.31-1.5.13:$nativeClassifier")

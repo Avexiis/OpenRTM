@@ -194,6 +194,11 @@ public final class ConsoleService
 		return info;
 	}
 
+	public synchronized String currentTitleId()
+	{
+		return HexUtils.hex32(JRPC.XamGetCurrentTitleId(requireConsole())).substring(2);
+	}
+
 	public synchronized String systemInfoRaw()
 	{
 		return rawCommand("systeminfo");

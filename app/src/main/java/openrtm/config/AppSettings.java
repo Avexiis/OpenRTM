@@ -74,6 +74,16 @@ public final class AppSettings
 		config.put("console.autoConnect", value);
 	}
 
+	public synchronized boolean discordRichPresence()
+	{
+		return config.bool("discord.richPresence", false);
+	}
+
+	public synchronized void discordRichPresence(boolean value)
+	{
+		config.put("discord.richPresence", value);
+	}
+
 	private static Optional<String> clean(String value)
 	{
 		if (value == null)

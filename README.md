@@ -24,11 +24,15 @@ Enter the console IP address at the top of the window and click **Connect**. A s
 
 OpenRTM remembers recently used console addresses. Enable **Autoconnect** to connect to the last console when the program starts. If an idle connection is lost, OpenRTM waits a few seconds between reconnection attempts.
 
+For Discord Rich Presence in a source build, create `app/src/main/resources/openrtm/discord/discord-rpc.properties` containing `applicationId=YOUR_DISCORD_APPLICATION_ID`. The resource is intentionally ignored by Git and is bundled into the jar during the build.
+
 ## Home
 
 The Home page shows information reported by the connected console, including its IP address, CPU key, gamertag, current title, console type, kernel version, console ID, SMC version, and temperatures.
 
 Click **Refresh Info** at the top of the window to read the information again.
+
+Enable **Discord Rich Presence** to share the current Xbox 360 title while the console is connected. The elapsed timer restarts when the title changes and the presence is cleared when the console disconnects.
 
 The console controls can:
 
