@@ -1,46 +1,45 @@
 package openrtm.config;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import openrtm.stfs.GameSaveService;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.Properties;
 
 public final class GameSaveAssignmentStore
 {
 	private static final int MAX_ASSIGNMENTS = 64;
 
-	private final Path directory;
-	private final Path file;
+	private final ConfigManager config;
 	private final List<SavedAssignment> assignments = new ArrayList<>();
 
 	public GameSaveAssignmentStore()
 	{
-		this(Path.of(System.getProperty("user.home"), ".openrtm"));
+		this(ConfigManager.shared());
 	}
 
 	GameSaveAssignmentStore(Path directory)
 	{
-		this.directory = directory.toAbsolutePath().normalize();
-		file = this.directory.resolve("game-save-assignments.properties");
+		this(new ConfigManager(directory));
+	}
+
+	GameSaveAssignmentStore(ConfigManager config)
+	{
+		this.config = config;
 		load();
 	}
 
 	public synchronized List<SavedAssignment> all()
 	{
-		return assignments.stream()
-			.sorted(Comparator.comparing(SavedAssignment::label, String.CASE_INSENSITIVE_ORDER))
-			.toList();
+		List<SavedAssignment> sorted = new ArrayList<>(assignments);
+		sorted.sort(Comparator.comparing(SavedAssignment::label, String.CASE_INSENSITIVE_ORDER));
+		return sorted;
 	}
 
 	public synchronized Optional<SavedAssignment> find(GameSaveService.Assignment assignment)
@@ -90,83 +89,40 @@ public final class GameSaveAssignmentStore
 
 	private void load()
 	{
-		if (!Files.isRegularFile(file))
+		for (JsonElement entry : config.array("gameSaves.assignments"))
 		{
-			return;
-		}
-		Properties values = new Properties();
-		try (InputStream input = Files.newInputStream(file))
-		{
-			values.load(input);
-			int count = Math.min(MAX_ASSIGNMENTS, Integer.parseInt(values.getProperty("count", "0")));
-			for (int index = 0; index < count; index++)
+			if (assignments.size() >= MAX_ASSIGNMENTS)
 			{
-				String prefix = "assignment." + index + ".";
-				try
-				{
-					assignments.add(new SavedAssignment(
-						values.getProperty(prefix + "label",
-							values.getProperty(prefix + "gamertag", "")).trim(),
-						normalizeId(values.getProperty(prefix + "profileId"), 16, "Profile ID"),
-						normalizeId(values.getProperty(prefix + "consoleId"), 10, "Console ID"),
-						normalizeId(values.getProperty(prefix + "deviceId"), 40, "Device ID")));
-				}
-				catch (RuntimeException ignored)
-				{
-					// Ignore a damaged saved entry without discarding the other assignments.
-				}
+				break;
 			}
-			assignments.removeIf(saved -> saved.label().isBlank());
+			try
+			{
+				JsonObject assignment = entry.getAsJsonObject();
+				assignments.add(new SavedAssignment(assignment.get("label").getAsString().trim(),
+					normalizeId(assignment.get("profileId").getAsString(), 16, "Profile ID"),
+					normalizeId(assignment.get("consoleId").getAsString(), 10, "Console ID"),
+					normalizeId(assignment.get("deviceId").getAsString(), 40, "Device ID")));
+			}
+			catch (RuntimeException ignored)
+			{
+			}
 		}
-		catch (IOException | NumberFormatException ignored)
-		{
-			assignments.clear();
-		}
+		assignments.removeIf(savedAssignment -> savedAssignment.label().isBlank());
 	}
 
 	private void write()
 	{
-		Properties values = new Properties();
-		List<SavedAssignment> saved = all();
-		values.setProperty("count", Integer.toString(saved.size()));
-		for (int index = 0; index < saved.size(); index++)
+		JsonArray values = new JsonArray();
+		for (SavedAssignment assignment : all())
 		{
-			SavedAssignment assignment = saved.get(index);
-			String prefix = "assignment." + index + ".";
-			values.setProperty(prefix + "label", assignment.label());
-			values.setProperty(prefix + "profileId", assignment.profileId());
-			values.setProperty(prefix + "consoleId", assignment.consoleId());
-			values.setProperty(prefix + "deviceId", assignment.deviceId());
+			JsonObject value = new JsonObject();
+			value.addProperty("label", assignment.label());
+			value.addProperty("profileId", assignment.profileId());
+			value.addProperty("consoleId", assignment.consoleId());
+			value.addProperty("deviceId", assignment.deviceId());
+			values.add(value);
 		}
-		try
-		{
-			Files.createDirectories(directory);
-			Path temporary = Files.createTempFile(directory, "game-save-assignments-", ".tmp");
-			try
-			{
-				try (OutputStream output = Files.newOutputStream(temporary))
-				{
-					values.store(output, "OpenRTM saved game profiles");
-				}
-				try
-				{
-					Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE,
-						StandardCopyOption.REPLACE_EXISTING);
-				}
-				catch (AtomicMoveNotSupportedException ignored)
-				{
-					Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
-				}
-			}
-			finally
-			{
-				Files.deleteIfExists(temporary);
-			}
-		}
-		catch (IOException failure)
-		{
-			throw new IllegalStateException("Could not save game assignment profiles", failure);
-		}
+		config.put("gameSaves.assignments", values);
 	}
 
 	private static String normalizeId(String value, int length, String label)

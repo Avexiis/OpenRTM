@@ -1,6 +1,6 @@
 # OpenRTM
 
-OpenRTM is a Linux-focused tool for working with a modified Xbox 360 over your local network. It can show console information, send console commands, debug running titles, transfer files and folders, organize installed content, inspect Xbox 360 packages, work with Xbox ISO files, and move game saves between profiles.
+OpenRTM is a Linux-focused tool for working with a modified Xbox 360 over your local network. It can display and record a video capture device, show console information, send console commands, debug running titles, transfer files and folders, organize installed content, inspect Xbox 360 packages, work with Xbox ISO files, and move game saves between profiles.
 
 OpenRTM is intended for RGH, JTAG, and BadUpdate/aBadAvatar consoles. Only use it with game backups and files that you legally own.
 
@@ -38,6 +38,18 @@ The console controls can:
 * Open or close the disc tray
 
 Save any open work before using the reboot or shutdown controls.
+
+## Video Capture
+
+The Video Capture page displays an HDMI capture card inside OpenRTM and can also open a detached viewer. Choose the video device, optional audio device, decoder, resolution, frame rate, and capture mode. The preview starts automatically when a capture device is available.
+
+**Source resolution** leaves the capture card's incoming resolution unchanged. The **1080p** and **720p** choices request that exact capture mode without changing it when the viewer window is resized. **60 FPS** is suited to cards that can sustain it, while **30 FPS** can stabilize inexpensive cards at 1080p.
+
+**Lowest latency** minimizes buffering. **High frame rate** requests the card's MJPEG mode when available. **Compatibility** uses more buffering for devices that do not remain stable in the faster modes. The **Automatic** decoder tries the available capture paths in order; FFmpeg and OpenCV can also be selected directly.
+
+Select **Detached viewer** to open a separate display. With **Lock viewer size** selected, its video area stays at the selected resolution. Clearing the lock allows the existing stream to stretch with the window without requesting a higher capture resolution.
+
+**Record** saves an MP4 file, including the selected audio input when available. **Screenshot** saves the current frame as a PNG. Both use the selected capture folder. If the capture card is disconnected or loses its HDMI signal, the viewer shows **No input source detected** and keeps checking for the signal to return.
 
 ## Memory and commands
 

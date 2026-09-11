@@ -65,6 +65,7 @@ public final class MainFrame extends JFrame
 	private final JCheckBox autoConnect = new JCheckBox("Autoconnect", service.autoConnect());
 	private final JLabel status = new JLabel("Disconnected");
 	private FileBrowserPanel fileBrowserPanel;
+	private VideoCapturePanel videoCapturePanel;
 	private volatile boolean reconnectWanted;
 	private volatile String reconnectHost = "";
 	private ScheduledFuture<?> reconnectFuture;
@@ -110,6 +111,10 @@ public final class MainFrame extends JFrame
 				stopReconnect();
 				service.cancelFileTransfer();
 				service.disconnect();
+				if (videoCapturePanel != null)
+				{
+					videoCapturePanel.shutdown();
+				}
 				executor.shutdownNow();
 				reconnectExecutor.shutdownNow();
 			}
@@ -149,6 +154,8 @@ public final class MainFrame extends JFrame
 	{
 		DefaultListModel<String> navigationModel = new DefaultListModel<>();
 		addPage(navigationModel, "Home", dashboardPanel());
+		videoCapturePanel = new VideoCapturePanel();
+		addPage(navigationModel, "Video Capture", videoCapturePanel);
 		addPage(navigationModel, "Memory & Commands", memoryPanel());
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());

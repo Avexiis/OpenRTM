@@ -36,7 +36,7 @@ public final class Main
 		if (target.isBlank())
 		{
 			System.out.println("No probe host supplied and no saved host found in "
-				+ service.settingsDirectory().resolve("settings.properties"));
+				+ service.settingsDirectory().resolve("settings.json"));
 			return;
 		}
 
