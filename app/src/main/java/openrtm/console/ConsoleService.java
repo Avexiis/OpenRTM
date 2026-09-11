@@ -234,6 +234,130 @@ public final class ConsoleService
 		rawCommand("dvdeject eject=" + (eject ? "1" : "0"));
 	}
 
+	// ── Module management ──────────────────────────────────────────────────────
+
+	/**
+	 * Lists modules currently loaded on the console.
+	 *
+	 * @return list of module info
+	 */
+	public synchronized List<ModuleInfo> listModules()
+	{
+		String response = rawCommand("modules");
+		List<ModuleInfo> modules = new ArrayList<>();
+		for (String line : response.split("\\R"))
+		{
+			String trimmed = line.trim();
+			if (trimmed.isBlank() || trimmed.startsWith("200") || trimmed.startsWith("202") || trimmed.equals("."))
+			{
+				continue;
+			}
+			if (statusCode(trimmed) >= 400)
+			{
+				continue;
+			}
+			Map<String, String> fields = parseFields(trimmed);
+			String name = fields.getOrDefault("name", trimmed);
+			long base = parseNumber(fields.getOrDefault("base", "0"));
+			long size = parseNumber(fields.getOrDefault("size", "0"));
+			if (fields.containsKey("sizelo") || fields.containsKey("sizehi"))
+			{
+				size = (parseNumber(fields.getOrDefault("sizehi", "0")) << 32)
+					| (parseNumber(fields.getOrDefault("sizelo", "0")) & 0xFFFF_FFFFL);
+			}
+			modules.add(new ModuleInfo(name, base, size));
+		}
+		return modules;
+	}
+
+	/**
+	 * Injects a module that's already on the console HDD.
+	 *
+	 * @param consolePath path to the XEX file on console (e.g. "Hdd:\\Modules\\MyMod.xex")
+	 */
+	public synchronized void injectModuleFromConsole(String consolePath)
+	{
+		JRPC.CallVoid(requireConsole(), "xboxkrnl.exe", 409, consolePath, 8, 0, 0);
+	}
+
+	/**
+	 * Unloads a module by name.
+	 *
+	 * @param moduleName the module name (e.g. "Hdd:\\MyMod.xex")
+	 */
+	public synchronized void unloadModule(String moduleName)
+	{
+		long base = JRPC.Call(requireConsole(), "xam.xex", 1102, moduleName);
+		if (base <= 0)
+		{
+			throw new IllegalStateException("Module not found: " + moduleName);
+		}
+		JRPC.WriteInt16(requireConsole(), base + 64, (short) 1);
+		JRPC.CallVoid(requireConsole(), "xboxkrnl.exe", 417, base);
+	}
+
+	/**
+	 * Reloads a module: unload then re-inject from console.
+	 *
+	 * @param consolePath path to the XEX file on console
+	 */
+	public synchronized void reloadModule(String consolePath)
+	{
+		unloadModule(consolePath);
+		try
+		{
+			Thread.sleep(100);
+		}
+		catch (InterruptedException e)
+		{
+			Thread.currentThread().interrupt();
+		}
+		injectModuleFromConsole(consolePath);
+	}
+
+	/**
+	 * Spoofs the title ID via memory write.
+	 *
+	 * @param titleId the title ID to spoof (e.g. 0xFFFE07D1 for dashboard)
+	 * @return the original 12 bytes (to undo the spoof later)
+	 */
+	public synchronized byte[] spoofTitleId(long titleId)
+	{
+		long address = 0x816F2778L;
+		byte[] original = JRPC.GetMemory(requireConsole(), address, 12);
+		byte[] data = new byte[12];
+		// Build title ID stub
+		int high = 0x00030000 | (int) ((titleId >> 16) & 0xFFFF);
+		int low = 0x00010000 | (int) (titleId & 0xFFFF);
+		data[0] = (byte) (high >> 24);
+		data[1] = (byte) (high >> 16);
+		data[2] = (byte) (high >> 8);
+		data[3] = (byte) high;
+		data[4] = (byte) (low >> 24);
+		data[5] = (byte) (low >> 16);
+		data[6] = (byte) (low >> 8);
+		data[7] = (byte) low;
+		data[8] = 0;
+		data[9] = 0;
+		data[10] = 0;
+		data[11] = 0;
+		JRPC.SetMemory(requireConsole(), address, data);
+		return original;
+	}
+
+	/**
+	 * Undoes a title ID spoof by restoring the original bytes.
+	 *
+	 * @param original the original 12 bytes before spoofing
+	 */
+	public synchronized void undoSpoofTitleId(byte[] original)
+	{
+		JRPC.SetMemory(requireConsole(), 0x816F2778L, original);
+	}
+
+	public record ModuleInfo(String name, long base, long size) {
+	}
+
 	public synchronized byte[] readMemory(long address, int length)
 	{
 		return JRPC.GetMemory(requireConsole(), address, length);
@@ -895,7 +1019,7 @@ public final class ConsoleService
 		return false;
 	}
 
-	private JRPC.IXboxConsole requireConsole()
+	JRPC.IXboxConsole requireConsole()
 	{
 		if (console == null)
 		{
