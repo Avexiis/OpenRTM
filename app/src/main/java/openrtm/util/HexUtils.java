@@ -143,6 +143,40 @@ public final class HexUtils
 		return out;
 	}
 
+	/**
+	 * Reverses a byte array in-place (for endianness conversion).
+	 */
+	public static void reverseBytes(byte[] array)
+	{
+		for (int i = 0; i < array.length / 2; i++)
+		{
+			byte temp = array[i];
+			array[i] = array[array.length - 1 - i];
+			array[array.length - 1 - i] = temp;
+		}
+	}
+
+	/**
+	 * Converts a 4-byte big-endian array to an int.
+	 */
+	public static int reverseBytes(byte[] array, int length)
+	{
+		int result = 0;
+		for (int i = 0; i < length && i < array.length; i++)
+		{
+			result = (result << 8) | (array[i] & 0xFF);
+		}
+		return result;
+	}
+
+	/**
+	 * Converts a 4-byte big-endian array to an int (alias for reverseBytes).
+	 */
+	public static int reverseBytesToInt(byte[] array)
+	{
+		return reverseBytes(array, 4);
+	}
+
 	private static String normalizeNumber(String text)
 	{
 		return (text == null ? "" : text.trim().replace("_", "")).toLowerCase(Locale.ROOT);

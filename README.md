@@ -172,6 +172,20 @@ Open a downloaded save to view its current profile, console, and device IDs. Ent
 
 Loading another save always shows that save's original IDs. To replace them with a saved set, choose a label from the **Profiles** dropdown. The three ID fields update immediately.
 
+## Module Manager
+
+The Module Manager allows you to see and interact with what modules are currently loaded and running on your console.
+
+You will have the options to:
+
+* **Load** inject and load selected module.
+* **Unload** unload selected module entirely.
+* **Reload** unload and reload selected module.
+* **TitleID Spoofing** spoofs whatever game/program you're running to appear as dashboard. Though this is not needed as most stealth servers (if you're playing online) have this built in.
+
+Currently, the loading only supports injecting modules from the console storage and not from your PC. This is something we will look into at a later date.
+
+
 ## Platform
 
 OpenRTM was developed on and for Linux. Most features use Java and can work on other platforms, but the bundled ISO tool is a 64-bit Linux program.
