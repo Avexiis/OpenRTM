@@ -157,7 +157,6 @@ public final class MainFrame extends JFrame
 		addPage(navigationModel, "ISO Extractor", new IsoToolPanel(this::runTask));
 		addPage(navigationModel, "Game Saves", new GameSaveEditorPanel(this::runTask));
 		addPage(navigationModel, "Module Manager", new ModuleManagerPanel(service, this::runTask));
-		addPage(navigationModel, "Battlefield", new BattlefieldPanel(service, this::runTask));
 
 		JList<String> navigation = new JList<>(navigationModel);
 		navigation.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
