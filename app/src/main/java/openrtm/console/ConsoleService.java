@@ -6,12 +6,13 @@ import openrtm.config.AppSettings;
 import openrtm.titleids.TitleIds;
 import openrtm.util.HexUtils;
 
-import java.io.IOException;
 import java.io.EOFException;
+import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -19,6 +20,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -182,8 +185,6 @@ public final class ConsoleService
 		info.put("Title", safe(() -> TitleIds.displayName(HexUtils.hex32(JRPC.XamGetCurrentTitleId(c)))));
 		info.put("Console Type", safe(() -> JRPC.ConsoleType(c)));
 		info.put("Kernel", safe(() -> Long.toString(JRPC.GetKernelVersion(c))));
-		//info.put("DM Version", safe(() -> XboxFeatures.getDMVersion(c))); //who cares
-		//info.put("Box ID", safe(() -> XboxFeatures.getBoxID(c))); //nonfunctional
 		info.put("Console ID", safe(() -> XboxFeatures.getConsoleID(c)));
 		info.put("SMC", safe(() -> XboxFeatures.getSMCVersion(c)));
 		info.put("CPU Temp", safe(() -> JRPC.GetTemperature(c, JRPC.TemperatureType.CPU) + " C"));
@@ -234,25 +235,19 @@ public final class ConsoleService
 		rawCommand("dvdeject eject=" + (eject ? "1" : "0"));
 	}
 
-	// ── Module management ──────────────────────────────────────────────────────
-
-	/**
-	 * Lists modules currently loaded on the console.
-	 *
-	 * @return list of module info
-	 */
 	public synchronized List<ModuleInfo> listModules()
 	{
-		String response = rawCommand("modules");
+		return parseModules(rawCommand("modules"));
+	}
+
+	static List<ModuleInfo> parseModules(String response)
+	{
+		throwIfXbdmError(response, "modules");
 		List<ModuleInfo> modules = new ArrayList<>();
 		for (String line : response.split("\\R"))
 		{
 			String trimmed = line.trim();
 			if (trimmed.isBlank() || trimmed.startsWith("200") || trimmed.startsWith("202") || trimmed.equals("."))
-			{
-				continue;
-			}
-			if (statusCode(trimmed) >= 400)
 			{
 				continue;
 			}
@@ -270,21 +265,11 @@ public final class ConsoleService
 		return modules;
 	}
 
-	/**
-	 * Injects a module that's already on the console HDD.
-	 *
-	 * @param consolePath path to the XEX file on console (e.g. "Hdd:\\Modules\\MyMod.xex")
-	 */
 	public synchronized void injectModuleFromConsole(String consolePath)
 	{
 		JRPC.CallVoid(requireConsole(), "xboxkrnl.exe", 409, consolePath, 8, 0, 0);
 	}
 
-	/**
-	 * Unloads a module by name.
-	 *
-	 * @param moduleName the module name (e.g. "Hdd:\\MyMod.xex")
-	 */
 	public synchronized void unloadModule(String moduleName)
 	{
 		long base = JRPC.Call(requireConsole(), "xam.xex", 1102, moduleName);
@@ -296,11 +281,6 @@ public final class ConsoleService
 		JRPC.CallVoid(requireConsole(), "xboxkrnl.exe", 417, base);
 	}
 
-	/**
-	 * Reloads a module: unload then re-inject from console.
-	 *
-	 * @param consolePath path to the XEX file on console
-	 */
 	public synchronized void reloadModule(String consolePath)
 	{
 		unloadModule(consolePath);
@@ -315,18 +295,11 @@ public final class ConsoleService
 		injectModuleFromConsole(consolePath);
 	}
 
-	/**
-	 * Spoofs the title ID via memory write.
-	 *
-	 * @param titleId the title ID to spoof (e.g. 0xFFFE07D1 for dashboard)
-	 * @return the original 12 bytes (to undo the spoof later)
-	 */
 	public synchronized byte[] spoofTitleId(long titleId)
 	{
 		long address = 0x816F2778L;
 		byte[] original = JRPC.GetMemory(requireConsole(), address, 12);
 		byte[] data = new byte[12];
-		// Build title ID stub
 		int high = 0x00030000 | (int) ((titleId >> 16) & 0xFFFF);
 		int low = 0x00010000 | (int) (titleId & 0xFFFF);
 		data[0] = (byte) (high >> 24);
@@ -345,17 +318,65 @@ public final class ConsoleService
 		return original;
 	}
 
-	/**
-	 * Undoes a title ID spoof by restoring the original bytes.
-	 *
-	 * @param original the original 12 bytes before spoofing
-	 */
 	public synchronized void undoSpoofTitleId(byte[] original)
 	{
 		JRPC.SetMemory(requireConsole(), 0x816F2778L, original);
 	}
 
-	public record ModuleInfo(String name, long base, long size) {
+	public static final class ModuleInfo
+	{
+		private final String name;
+		private final long base;
+		private final long size;
+
+		public ModuleInfo(String name, long base, long size)
+		{
+			this.name = name;
+			this.base = base;
+			this.size = size;
+		}
+
+		public String name()
+		{
+			return name;
+		}
+
+		public long base()
+		{
+			return base;
+		}
+
+		public long size()
+		{
+			return size;
+		}
+
+		@Override
+		public boolean equals(Object other)
+		{
+			if (this == other)
+			{
+				return true;
+			}
+			if (!(other instanceof ModuleInfo))
+			{
+				return false;
+			}
+			ModuleInfo module = (ModuleInfo) other;
+			return base == module.base && size == module.size && Objects.equals(name, module.name);
+		}
+
+		@Override
+		public int hashCode()
+		{
+			return Objects.hash(name, base, size);
+		}
+
+		@Override
+		public String toString()
+		{
+			return "ModuleInfo[name=" + name + ", base=" + base + ", size=" + size + "]";
+		}
 	}
 
 	public synchronized byte[] readMemory(long address, int length)
@@ -829,7 +850,7 @@ public final class ConsoleService
 			}
 
 			@Override
-			public long firstMismatch(Path localPath, String path, java.util.function.LongConsumer progress)
+			public long firstMismatch(Path localPath, String path, LongConsumer progress)
 				throws ResumableUploader.RemoteException
 			{
 				return remoteCall(() -> requireXbdm().FindFirstMismatch(localPath, path, progress));
@@ -848,7 +869,7 @@ public final class ConsoleService
 			}
 
 			@Override
-			public boolean matches(Path localPath, String path, java.util.function.LongConsumer progress)
+			public boolean matches(Path localPath, String path, LongConsumer progress)
 				throws ResumableUploader.RemoteException
 			{
 				return remoteCall(() -> requireXbdm().FileMatches(localPath, path, progress));
@@ -884,14 +905,14 @@ public final class ConsoleService
 			}
 
 			@Override
-			public void send(Path localPath, String path, java.util.function.LongConsumer progress)
+			public void send(Path localPath, String path, LongConsumer progress)
 				throws ResumableUploader.RemoteException
 			{
 				remoteRun(() -> requireXbdm().SendFile(localPath, path, progress));
 			}
 
 			@Override
-			public boolean matches(Path localPath, String path, java.util.function.LongConsumer progress)
+			public boolean matches(Path localPath, String path, LongConsumer progress)
 				throws ResumableUploader.RemoteException
 			{
 				return remoteCall(() -> requireXbdm().FileMatches(localPath, path, progress));
@@ -992,7 +1013,7 @@ public final class ConsoleService
 		}
 		String message = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
 		String lower = message.toLowerCase(Locale.ROOT);
-		if (failure instanceof java.nio.file.FileSystemException)
+		if (failure instanceof FileSystemException)
 		{
 			return false;
 		}

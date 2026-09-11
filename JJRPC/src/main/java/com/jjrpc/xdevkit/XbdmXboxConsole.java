@@ -2,7 +2,12 @@ package com.jjrpc.xdevkit;
 
 import com.jjrpc.JRPC;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -223,7 +228,6 @@ public final class XbdmXboxConsole implements JRPC.IXboxConsole
 		@Override
 		public void InvalidateMemoryCache(boolean unused, long address, long length)
 		{
-			//XBDM has no explicit cache invalidation for these calls, no-op.
 		}
 
 		@Override

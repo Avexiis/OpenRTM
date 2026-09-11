@@ -21,15 +21,19 @@ import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Image;
 import java.awt.Insets;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -223,7 +227,7 @@ public final class PackageManagerPanel extends JPanel
 		{
 			requested = Path.of(value).toAbsolutePath().normalize();
 		}
-		catch (java.nio.file.InvalidPathException failure)
+		catch (InvalidPathException failure)
 		{
 			JOptionPane.showMessageDialog(this, "Package path is invalid", "Open Package",
 				JOptionPane.WARNING_MESSAGE);
@@ -323,7 +327,7 @@ public final class PackageManagerPanel extends JPanel
 
 	private static byte[] changedImage(byte[] current, byte[] original)
 	{
-		return java.util.Arrays.equals(current, original) ? null : current;
+		return Arrays.equals(current, original) ? null : current;
 	}
 
 	private void replaceImage(boolean titleImage)
@@ -428,7 +432,7 @@ public final class PackageManagerPanel extends JPanel
 	{
 		try
 		{
-			java.awt.image.BufferedImage image = data == null || data.length == 0 ? null
+			BufferedImage image = data == null || data.length == 0 ? null
 				: ImageIO.read(new ByteArrayInputStream(data));
 			if (image == null)
 			{
@@ -448,7 +452,7 @@ public final class PackageManagerPanel extends JPanel
 		}
 	}
 
-	private static void addField(JPanel panel, int row, String label, java.awt.Component value)
+	private static void addField(JPanel panel, int row, String label, Component value)
 	{
 		GridBagConstraints c = new GridBagConstraints();
 		c.insets = new Insets(3, 5, 3, 5);

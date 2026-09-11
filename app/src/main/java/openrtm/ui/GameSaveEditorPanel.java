@@ -6,6 +6,7 @@ import openrtm.stfs.GameSaveService;
 import openrtm.titleids.TitleIds;
 
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -22,10 +23,12 @@ import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -66,7 +69,7 @@ public final class GameSaveEditorPanel extends JPanel
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 
 		JPanel content = new JPanel();
-		content.setLayout(new javax.swing.BoxLayout(content, javax.swing.BoxLayout.Y_AXIS));
+		content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 		content.add(fileSection());
 		content.add(packageSection());
 		content.add(assignmentSection());
@@ -195,10 +198,10 @@ public final class GameSaveEditorPanel extends JPanel
 		Path destination = chooser.getSelectedFile().toPath().toAbsolutePath().normalize();
 		if (Files.exists(destination))
 		{
-			int choice = javax.swing.JOptionPane.showConfirmDialog(
+			int choice = JOptionPane.showConfirmDialog(
 				this, "Replace the existing file?", "Save As",
-				javax.swing.JOptionPane.YES_NO_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
-			if (choice != javax.swing.JOptionPane.YES_OPTION)
+				JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+			if (choice != JOptionPane.YES_OPTION)
 			{
 				return;
 			}
@@ -394,7 +397,7 @@ public final class GameSaveEditorPanel extends JPanel
 	private static JPanel section(String title)
 	{
 		JPanel panel = new JPanel();
-		panel.setLayout(new javax.swing.BoxLayout(panel, javax.swing.BoxLayout.Y_AXIS));
+		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 		panel.setAlignmentX(LEFT_ALIGNMENT);
 		panel.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createMatteBorder(1, 0, 0, 0, LINE),
@@ -413,7 +416,7 @@ public final class GameSaveEditorPanel extends JPanel
 		return panel;
 	}
 
-	private static void addField(JPanel panel, int row, String label, java.awt.Component value, boolean flexible)
+	private static void addField(JPanel panel, int row, String label, Component value, boolean flexible)
 	{
 		GridBagConstraints c = new GridBagConstraints();
 		c.insets = new Insets(4, 6, 4, 6);
@@ -469,7 +472,7 @@ public final class GameSaveEditorPanel extends JPanel
 		return new FileFilter()
 		{
 			@Override
-			public boolean accept(java.io.File file)
+			public boolean accept(File file)
 			{
 				return file.isDirectory() || !file.getName().startsWith(".");
 			}

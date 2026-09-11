@@ -7,6 +7,7 @@ import java.security.PrivateKey;
 import java.security.Signature;
 import java.security.spec.RSAPrivateCrtKeySpec;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.Arrays;
 import java.util.HexFormat;
 
 final class ConCertificate
@@ -83,8 +84,8 @@ final class ConCertificate
 		}
 		try
 		{
-			byte[] exponent = java.util.Arrays.copyOfRange(certificate, 0x24, 0x28);
-			byte[] xboxModulus = java.util.Arrays.copyOfRange(certificate, 0x28, 0xA8);
+			byte[] exponent = Arrays.copyOfRange(certificate, 0x24, 0x28);
+			byte[] xboxModulus = Arrays.copyOfRange(certificate, 0x28, 0xA8);
 			byte[] modulus = reverseQwords(xboxModulus);
 			byte[] signature = storedSignature.clone();
 			reverse(signature);

@@ -6,6 +6,7 @@ import openrtm.ui.files.FileBrowserPanel;
 import openrtm.util.HexUtils;
 
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -32,6 +33,8 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -103,10 +106,10 @@ public final class MainFrame extends JFrame
 				stopReconnect();
 			}
 		});
-		addWindowListener(new java.awt.event.WindowAdapter()
+		addWindowListener(new WindowAdapter()
 		{
 			@Override
-			public void windowClosed(java.awt.event.WindowEvent e)
+			public void windowClosed(WindowEvent e)
 			{
 				stopReconnect();
 				service.cancelFileTransfer();
@@ -497,7 +500,7 @@ public final class MainFrame extends JFrame
 	private JPanel section(String title)
 	{
 		JPanel panel = new JPanel();
-		panel.setLayout(new javax.swing.BoxLayout(panel, javax.swing.BoxLayout.Y_AXIS));
+		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 		panel.setAlignmentX(Component.LEFT_ALIGNMENT);
 		panel.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createMatteBorder(1, 0, 0, 0, LINE),

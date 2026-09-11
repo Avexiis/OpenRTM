@@ -11,6 +11,7 @@ import openrtm.console.DebuggerService.ThreadInfo;
 import openrtm.util.HexUtils;
 
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -31,6 +32,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.FlowLayout;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -100,7 +102,7 @@ public final class DebuggerPanel extends JPanel
 	private JPanel sessionControls()
 	{
 		JPanel controls = new JPanel();
-		controls.setLayout(new javax.swing.BoxLayout(controls, javax.swing.BoxLayout.Y_AXIS));
+		controls.setLayout(new BoxLayout(controls, BoxLayout.Y_AXIS));
 		controls.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, LINE));
 
 		JPanel session = row();
@@ -539,7 +541,7 @@ public final class DebuggerPanel extends JPanel
 	{
 		JFileChooser chooser = new JFileChooser();
 		chooser.setDialogTitle("Save debugger log");
-		chooser.setSelectedFile(new java.io.File("openrtm-debug.log"));
+		chooser.setSelectedFile(new File("openrtm-debug.log"));
 		if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION)
 		{
 			return;

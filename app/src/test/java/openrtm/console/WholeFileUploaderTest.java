@@ -1,6 +1,8 @@
 package openrtm.console;
 
 import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
@@ -91,7 +93,7 @@ class WholeFileUploaderTest {
                 }
                 data = local;
                 progress.accept(data.length);
-            } catch (java.io.IOException failure) {
+			} catch (IOException failure) {
                 throw new ResumableUploader.RemoteException(false, failure.getMessage(), failure);
             }
         }
@@ -103,7 +105,7 @@ class WholeFileUploaderTest {
                 byte[] local = Files.readAllBytes(localPath);
                 progress.accept(data.length);
                 return Arrays.equals(local, data);
-            } catch (java.io.IOException failure) {
+			} catch (IOException failure) {
                 throw new ResumableUploader.RemoteException(false, failure.getMessage(), failure);
             }
         }

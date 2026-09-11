@@ -1,24 +1,16 @@
 package openrtm.ui;
 
 import openrtm.console.ConsoleService;
-import openrtm.console.ConsoleService.FileEntry;
 import openrtm.console.ConsoleService.ModuleInfo;
 
 import javax.swing.BorderFactory;
-import javax.swing.DefaultListModel;
-import javax.swing.DropMode;
-import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
-import javax.swing.JComboBox;
-import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
@@ -30,9 +22,6 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
-import java.awt.HeadlessException;
-import java.io.File;
-import java.nio.file.Path;
 import java.util.List;
 
 public final class ModuleManagerPanel extends JPanel
@@ -66,7 +55,8 @@ public final class ModuleManagerPanel extends JPanel
 	private final JTextField pathField = new JTextField("");
 
 	private byte[] spoofOriginalBytes;
-	private boolean isSpoofed = false;
+	private boolean isSpoofed;
+	private boolean spoofActionPending;
 
 	public ModuleManagerPanel(ConsoleService service, TaskRunner tasks)
 	{
@@ -288,6 +278,10 @@ public final class ModuleManagerPanel extends JPanel
 
 	private void spoofTitleId()
 	{
+		if (isSpoofed || spoofActionPending)
+		{
+			return;
+		}
 		long titleId;
 		if (spoofDashboard.isSelected())
 		{
@@ -311,31 +305,67 @@ public final class ModuleManagerPanel extends JPanel
 			}
 		}
 
-		tasks.run("spoof title id", () -> {
-			spoofOriginalBytes = service.spoofTitleId(titleId);
-			isSpoofed = true;
-			SwingUtilities.invokeLater(() -> {
-				setStatus("Spoofed title ID to: 0x" + Long.toHexString(titleId).toUpperCase(), OK);
-				updateButtons();
-			});
+		spoofActionPending = true;
+		updateButtons();
+		tasks.run("spoof title id", () ->
+		{
+			try
+			{
+				byte[] original = service.spoofTitleId(titleId);
+				SwingUtilities.invokeLater(() ->
+				{
+					spoofOriginalBytes = original;
+					isSpoofed = true;
+					spoofActionPending = false;
+					setStatus("Spoofed title ID to: 0x" + Long.toHexString(titleId).toUpperCase(), OK);
+					updateButtons();
+				});
+			}
+			catch (Exception failure)
+			{
+				SwingUtilities.invokeLater(() ->
+				{
+					spoofActionPending = false;
+					updateButtons();
+				});
+				throw failure;
+			}
 		});
 	}
 
 	private void undoSpoof()
 	{
-		if (!isSpoofed || spoofOriginalBytes == null)
+		if (!isSpoofed || spoofOriginalBytes == null || spoofActionPending)
 		{
 			return;
 		}
 
-		tasks.run("undo spoof", () -> {
-			service.undoSpoofTitleId(spoofOriginalBytes);
-			isSpoofed = false;
-			spoofOriginalBytes = null;
-			SwingUtilities.invokeLater(() -> {
-				setStatus("Title ID spoof undone", OK);
-				updateButtons();
-			});
+		byte[] original = spoofOriginalBytes;
+		spoofActionPending = true;
+		updateButtons();
+		tasks.run("undo spoof", () ->
+		{
+			try
+			{
+				service.undoSpoofTitleId(original);
+				SwingUtilities.invokeLater(() ->
+				{
+					isSpoofed = false;
+					spoofOriginalBytes = null;
+					spoofActionPending = false;
+					setStatus("Title ID spoof undone", OK);
+					updateButtons();
+				});
+			}
+			catch (Exception failure)
+			{
+				SwingUtilities.invokeLater(() ->
+				{
+					spoofActionPending = false;
+					updateButtons();
+				});
+				throw failure;
+			}
 		});
 	}
 
@@ -344,7 +374,8 @@ public final class ModuleManagerPanel extends JPanel
 		boolean hasSelection = moduleTable.getSelectedRow() >= 0;
 		unloadButton.setEnabled(hasSelection);
 		reloadButton.setEnabled(hasSelection);
-		undoSpoofButton.setEnabled(isSpoofed);
+		spoofButton.setEnabled(!isSpoofed && !spoofActionPending);
+		undoSpoofButton.setEnabled(isSpoofed && !spoofActionPending);
 	}
 
 	private void setStatus(String text, Color color)

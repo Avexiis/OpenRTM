@@ -1,12 +1,19 @@
 package com.jjrpc;
 
-import java.io.*;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Arrays;
+import java.util.Locale;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
@@ -16,9 +23,6 @@ import java.util.function.LongConsumer;
 
 public final class JRPC
 {
-	/**
-	 * Util
-	 */
 	public static class ComException extends RuntimeException
 	{
 		private final int errorCode;
@@ -887,7 +891,6 @@ public final class JRPC
 			@Override
 			public void InvalidateMemoryCache(boolean unused, long address, long length)
 			{
-				/* no-op */
 			}
 
 			@Override
@@ -933,10 +936,6 @@ public final class JRPC
 			}
 		}
 	}
-
-	/**
-	 * Begin JRPC Port
-	 */
 
 	public enum TemperatureType
 	{

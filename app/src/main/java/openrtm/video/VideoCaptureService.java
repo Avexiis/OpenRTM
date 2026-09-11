@@ -2,6 +2,7 @@ package openrtm.video;
 
 import openrtm.video.VideoCaptureConfig.Decoder;
 import openrtm.video.VideoCaptureConfig.Performance;
+import openrtm.video.VideoCaptureConfig.Resolution;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.FFmpegFrameRecorder;
 import org.bytedeco.javacv.FFmpegLogCallback;
@@ -38,7 +39,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_AAC;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_MPEG4;
-import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_ERROR;
+import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_PCM_S16LE;
+import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_FATAL;
 import static org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P;
 import static org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16;
 import static org.bytedeco.opencv.global.opencv_videoio.CAP_PROP_BUFFERSIZE;
@@ -74,7 +76,7 @@ public final class VideoCaptureService implements AutoCloseable
 	public VideoCaptureService(Listener listener)
 	{
 		this.listener = listener;
-		FFmpegLogCallback.setLevel(AV_LOG_ERROR);
+		FFmpegLogCallback.setLevel(AV_LOG_FATAL);
 	}
 
 	public synchronized void start(VideoCaptureConfig config)
@@ -356,14 +358,12 @@ public final class VideoCaptureService implements AutoCloseable
 			grabber.setImageHeight(config.resolution().height());
 		}
 		int requestedFrameRate = config.frameRate().framesPerSecond();
-		if (requestedFrameRate == 0 && config.performance() == Performance.HIGH_FRAME_RATE)
+		if (requestedFrameRate == 0)
 		{
-			requestedFrameRate = 60;
+			requestedFrameRate = config.performance() == Performance.HIGH_FRAME_RATE
+				|| config.resolution() == Resolution.HD_720 ? 60 : 30;
 		}
-		if (requestedFrameRate > 0)
-		{
-			grabber.setFrameRate(requestedFrameRate);
-		}
+		grabber.setFrameRate(requestedFrameRate);
 		grabber.setNumBuffers(config.performance() == Performance.COMPATIBILITY ? 4 : 1);
 		grabber.setTimeout(config.performance() == Performance.COMPATIBILITY ? 5_000 : 1_500);
 		return grabber;
@@ -453,7 +453,7 @@ public final class VideoCaptureService implements AutoCloseable
 		AudioFormat format = new AudioFormat(48_000, 16, 2, true, false);
 		int bufferSize = (int) (format.getFrameRate() * format.getFrameSize() / 25);
 		FFmpegFrameGrabber grabber = new FFmpegFrameGrabber(config.audioDevice().pulseSource());
-		SourceDataLine output = null;
+		FFmpegFrameRecorder monitor = null;
 		try
 		{
 			grabber.setFormat("pulse");
@@ -465,17 +465,13 @@ public final class VideoCaptureService implements AutoCloseable
 			grabber.start();
 			if (config.monitorAudio())
 			{
-				DataLine.Info outputInfo = new DataLine.Info(SourceDataLine.class, format);
-				output = (SourceDataLine) AudioSystem.getLine(outputInfo);
-				output.open(format, bufferSize);
-				output.start();
+				monitor = startPulseMonitor(format, bufferSize);
 			}
-			activeAudioOutput = output;
 			activeAudioFormat = format;
 			listener.onAudioState(config.monitorAudio() ? "Audio live and monitored" : "Audio live");
-			readPulseAudio(token, grabber, output, format);
+			readPulseAudio(token, grabber, monitor, format);
 		}
-		catch (FrameGrabber.Exception | LineUnavailableException | IllegalArgumentException failure)
+		catch (FrameGrabber.Exception | FrameRecorder.Exception | IllegalArgumentException failure)
 		{
 			if (current(token))
 			{
@@ -484,13 +480,35 @@ public final class VideoCaptureService implements AutoCloseable
 		}
 		finally
 		{
-			if (activeAudioOutput == output)
-			{
-				activeAudioOutput = null;
-			}
 			activeAudioFormat = null;
-			closeLine(output);
+			closeRecorder(monitor);
 			closeGrabber(grabber);
+		}
+	}
+
+	private FFmpegFrameRecorder startPulseMonitor(AudioFormat format, int bufferSize)
+		throws FrameRecorder.Exception
+	{
+		FFmpegFrameRecorder monitor = new FFmpegFrameRecorder("default", format.getChannels());
+		monitor.setFormat("pulse");
+		monitor.setAudioCodec(AV_CODEC_ID_PCM_S16LE);
+		monitor.setSampleRate((int) format.getSampleRate());
+		monitor.setSampleFormat(AV_SAMPLE_FMT_S16);
+		monitor.setOption("name", "OpenRTM");
+		monitor.setOption("stream_name", "Xbox 360 Capture Monitor");
+		monitor.setOption("device", "default");
+		monitor.setOption("buffer_size", Integer.toString(bufferSize));
+		monitor.setOption("prebuf", "0");
+		monitor.setOption("minreq", Integer.toString(bufferSize / 4));
+		try
+		{
+			monitor.start();
+			return monitor;
+		}
+		catch (FrameRecorder.Exception failure)
+		{
+			closeRecorder(monitor);
+			throw failure;
 		}
 	}
 
@@ -520,8 +538,8 @@ public final class VideoCaptureService implements AutoCloseable
 		}
 	}
 
-	private void readPulseAudio(long token, FFmpegFrameGrabber grabber, SourceDataLine output,
-		AudioFormat format) throws FrameGrabber.Exception
+	private void readPulseAudio(long token, FFmpegFrameGrabber grabber, FFmpegFrameRecorder monitor,
+		AudioFormat format) throws FrameGrabber.Exception, FrameRecorder.Exception
 	{
 		while (current(token))
 		{
@@ -531,10 +549,10 @@ public final class VideoCaptureService implements AutoCloseable
 			{
 				continue;
 			}
-			if (output != null)
+			if (monitor != null)
 			{
-				byte[] bytes = audioBytes(samples);
-				output.write(bytes, 0, bytes.length);
+				monitor.recordSamples((int) format.getSampleRate(), format.getChannels(),
+					ShortBuffer.wrap(samples));
 			}
 			RecordingSession session = recording;
 			if (session != null && session.hasAudio())
@@ -584,11 +602,19 @@ public final class VideoCaptureService implements AutoCloseable
 		return samples;
 	}
 
-	private static byte[] audioBytes(short[] samples)
+	private static void closeRecorder(FFmpegFrameRecorder recorder)
 	{
-		byte[] bytes = new byte[samples.length * 2];
-		ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(samples);
-		return bytes;
+		if (recorder == null)
+		{
+			return;
+		}
+		try
+		{
+			recorder.close();
+		}
+		catch (FrameRecorder.Exception ignored)
+		{
+		}
 	}
 
 	private List<Decoder> decoderOrder(Decoder selected)

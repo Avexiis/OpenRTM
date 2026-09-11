@@ -2,7 +2,9 @@ package com.jjrpc.xdevkit;
 
 import com.jjrpc.JRPC;
 
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -15,7 +17,7 @@ public final class XboxFeatures
 
 	public enum SystemInfo
 	{
-		HDD, // size/serial info
+		HDD,
 		Type,
 		Platform,
 		System,

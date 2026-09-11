@@ -268,7 +268,6 @@ public final class DebuggerService
 			}
 			catch (RuntimeException ignored)
 			{
-				//A title can destroy a thread between the list and detail commands.
 			}
 		}
 		return result;

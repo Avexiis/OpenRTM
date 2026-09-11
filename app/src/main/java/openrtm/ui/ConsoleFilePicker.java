@@ -14,13 +14,17 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.Locale;
 
@@ -56,11 +60,10 @@ public final class ConsoleFilePicker extends JDialog
 		fileList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 		fileList.setCellRenderer(new ConsoleFileRenderer());
 
-		// Double-click to navigate into folders or select files
-		fileList.addMouseListener(new java.awt.event.MouseAdapter()
+		fileList.addMouseListener(new MouseAdapter()
 		{
 			@Override
-			public void mouseClicked(java.awt.event.MouseEvent e)
+			public void mouseClicked(MouseEvent e)
 			{
 				if (e.getClickCount() == 2)
 				{
@@ -146,7 +149,7 @@ public final class ConsoleFilePicker extends JDialog
 		}
 		else if (lastSlash == 2)
 		{
-			path = path.substring(0, 3); // Keep drive letter
+			path = path.substring(0, 3);
 		}
 		pathField.setText(path);
 		loadDirectory(path);
@@ -202,10 +205,10 @@ public final class ConsoleFilePicker extends JDialog
 		return selectedPath;
 	}
 
-	private static class ConsoleFileRenderer extends JLabel implements javax.swing.ListCellRenderer<FileEntry>
+	private static class ConsoleFileRenderer extends JLabel implements ListCellRenderer<FileEntry>
 	{
 		@Override
-		public java.awt.Component getListCellRendererComponent(
+		public Component getListCellRendererComponent(
 			JList<? extends FileEntry> list, FileEntry value, int index,
 			boolean isSelected, boolean cellHasFocus)
 		{

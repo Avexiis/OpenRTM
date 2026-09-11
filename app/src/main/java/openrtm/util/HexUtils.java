@@ -143,9 +143,6 @@ public final class HexUtils
 		return out;
 	}
 
-	/**
-	 * Reverses a byte array in-place (for endianness conversion).
-	 */
 	public static void reverseBytes(byte[] array)
 	{
 		for (int i = 0; i < array.length / 2; i++)
@@ -156,9 +153,6 @@ public final class HexUtils
 		}
 	}
 
-	/**
-	 * Converts a 4-byte big-endian array to an int.
-	 */
 	public static int reverseBytes(byte[] array, int length)
 	{
 		int result = 0;
@@ -169,9 +163,6 @@ public final class HexUtils
 		return result;
 	}
 
-	/**
-	 * Converts a 4-byte big-endian array to an int (alias for reverseBytes).
-	 */
 	public static int reverseBytesToInt(byte[] array)
 	{
 		return reverseBytes(array, 4);
