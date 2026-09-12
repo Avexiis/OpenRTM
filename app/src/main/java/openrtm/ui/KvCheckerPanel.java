@@ -1,4 +1,4 @@
-package openrtm.kvchecker.ui;
+package openrtm.ui;
 
 import openrtm.kvchecker.KvCheckerService;
 import openrtm.kvchecker.KvFileOrganizer;

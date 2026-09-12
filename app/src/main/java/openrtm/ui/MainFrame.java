@@ -4,9 +4,7 @@ import com.jjrpc.JRPC;
 import openrtm.config.AppSettings;
 import openrtm.console.ConsoleService;
 import openrtm.discord.DiscordRpcService;
-import openrtm.kvchecker.ui.KvCheckerPanel;
 import openrtm.profile.ProfileWorkspace;
-import openrtm.ui.files.FileBrowserPanel;
 import openrtm.util.HexUtils;
 
 import javax.swing.BorderFactory;

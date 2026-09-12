@@ -1,9 +1,8 @@
-package openrtm.ui.files;
+package openrtm.ui;
 
 import openrtm.console.ConsoleService;
 import openrtm.stfs.PackageService;
 import openrtm.titleids.TitleIds;
-import openrtm.ui.TaskRunner;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
