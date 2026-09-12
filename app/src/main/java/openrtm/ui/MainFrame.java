@@ -4,6 +4,7 @@ import com.jjrpc.JRPC;
 import openrtm.config.AppSettings;
 import openrtm.console.ConsoleService;
 import openrtm.discord.DiscordRpcService;
+import openrtm.kvchecker.ui.KvCheckerPanel;
 import openrtm.profile.ProfileWorkspace;
 import openrtm.ui.files.FileBrowserPanel;
 import openrtm.util.HexUtils;
@@ -77,6 +78,7 @@ public final class MainFrame extends JFrame
 	private FileBrowserPanel fileBrowserPanel;
 	private VideoCapturePanel videoCapturePanel;
 	private FatxBrowserPanel fatxBrowserPanel;
+	private KvCheckerPanel kvCheckerPanel;
 	private volatile boolean reconnectWanted;
 	private volatile String reconnectHost = "";
 	private ScheduledFuture<?> reconnectFuture;
@@ -132,6 +134,10 @@ public final class MainFrame extends JFrame
 				{
 					fatxBrowserPanel.shutdown();
 				}
+				if (kvCheckerPanel != null)
+				{
+					kvCheckerPanel.shutdown();
+				}
 				executor.shutdownNow();
 				reconnectExecutor.shutdownNow();
 			}
@@ -177,6 +183,8 @@ public final class MainFrame extends JFrame
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
 		addPage(navigationModel, "Content Library", new ContentLibraryPanel(service, this::runTask));
+		kvCheckerPanel = new KvCheckerPanel();
+		addPage(navigationModel, "KV Checker", kvCheckerPanel);
 		addPage(navigationModel, "Gamer Profile", new ProfileEditorPanel(profileWorkspace, this::runTask));
 		addPage(navigationModel, "Add Profile Game", new ProfileGameAdderPanel(profileWorkspace, this::runTask));
 		addPage(navigationModel, "Achievements", new AchievementUnlockerPanel(profileWorkspace, this::runTask));

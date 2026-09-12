@@ -140,6 +140,14 @@ To install a package:
 
 Existing packages with the same name are verified. Matching packages are left alone, while incomplete or corrupt copies are repaired. Use the Game Saves page for offline profile reassignment.
 
+## KV Checker
+
+The KV Checker accepts one or more 16 KB `.bin` key vault files through **Add Files** or drag and drop. Use **Add Folder** to recursively find every file named `KV.bin` in a selected folder and all of its subfolders. Dropped folders are searched the same way. Files with another extension are skipped, while invalid key vaults remain in the table with the reason they were rejected.
+
+Use **Check All** to process every valid file, or select table rows and use **Check Selected**. Each file retains its banned, unbanned, or error result. Checking requires an internet connection that permits Xbox authentication traffic over UDP port 88.
+
+After checking, **Sort Results** can move successful results into `banned/<console serial>/KV.bin` and `unbanned/<console serial>/KV.bin` beneath a folder you choose. Existing destination files are never overwritten.
+
 ## Package Manager
 
 The Package Manager opens CON, LIVE, and PIRS Xbox 360 packages. It shows package metadata, assignment IDs, header status, thumbnails, the suggested console folder, and the files stored inside an STFS package.
