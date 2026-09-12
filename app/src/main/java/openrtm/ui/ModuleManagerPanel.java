@@ -6,6 +6,7 @@ import openrtm.console.ConsoleService.ModuleInfo;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -15,14 +16,24 @@ import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
+import javax.swing.TransferHandler;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 public final class ModuleManagerPanel extends JPanel
 {
@@ -45,6 +56,7 @@ public final class ModuleManagerPanel extends JPanel
 	};
 	private final JTable moduleTable = new JTable(moduleModel);
 	private final JButton refreshButton = new JButton("Refresh");
+	private final JButton loadFromComputerButton = new JButton("Load from PC...");
 	private final JButton injectButton = new JButton("Inject from Console...");
 	private final JButton unloadButton = new JButton("Unload");
 	private final JButton reloadButton = new JButton("Reload");
@@ -53,6 +65,7 @@ public final class ModuleManagerPanel extends JPanel
 	private final JCheckBox spoofDashboard = new JCheckBox("Spoof as Dashboard (0xFFFE07D1)");
 	private final JLabel statusLabel = new JLabel(" ");
 	private final JTextField pathField = new JTextField("");
+	private final Map<String, Path> computerModuleSources = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 
 	private byte[] spoofOriginalBytes;
 	private boolean isSpoofed;
@@ -70,6 +83,9 @@ public final class ModuleManagerPanel extends JPanel
 		add(createModuleTable(), BorderLayout.CENTER);
 		add(createStatusBar(), BorderLayout.SOUTH);
 		add(createSidePanel(), BorderLayout.EAST);
+		TransferHandler transferHandler = createModuleTransferHandler();
+		setTransferHandler(transferHandler);
+		moduleTable.setTransferHandler(transferHandler);
 
 		updateButtons();
 	}
@@ -80,6 +96,7 @@ public final class ModuleManagerPanel extends JPanel
 		toolbar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, LINE));
 
 		refreshButton.addActionListener(e -> refreshModules());
+		loadFromComputerButton.addActionListener(e -> browseComputer());
 		injectButton.addActionListener(e -> injectFromConsole());
 		unloadButton.addActionListener(e -> unloadModule());
 		reloadButton.addActionListener(e -> reloadModule());
@@ -87,6 +104,7 @@ public final class ModuleManagerPanel extends JPanel
 		undoSpoofButton.addActionListener(e -> undoSpoof());
 
 		toolbar.add(refreshButton);
+		toolbar.add(loadFromComputerButton);
 		toolbar.add(injectButton);
 		toolbar.add(unloadButton);
 		toolbar.add(reloadButton);
@@ -178,17 +196,77 @@ public final class ModuleManagerPanel extends JPanel
 			List<ModuleInfo> modules = service.listModules();
 			SwingUtilities.invokeLater(() -> {
 				moduleModel.setRowCount(0);
+				List<String> moduleNames = new ArrayList<>();
 				for (ModuleInfo m : modules)
 				{
+					moduleNames.add(m.name());
 					moduleModel.addRow(new Object[]{
 						m.name(),
 						String.format("0x%08X", m.base()),
 						formatSize(m.size())
 					});
 				}
+				computerModuleSources.keySet().removeIf(name -> moduleNames.stream()
+					.noneMatch(moduleName -> moduleName.equalsIgnoreCase(name)));
 				setStatus("Found " + modules.size() + " modules", OK);
 				updateButtons();
 			});
+		});
+	}
+
+	private void browseComputer()
+	{
+		JFileChooser chooser = new JFileChooser();
+		chooser.setDialogTitle("Load Xbox 360 Module");
+		chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+		chooser.setMultiSelectionEnabled(true);
+		chooser.setFileFilter(new FileNameExtensionFilter("Xbox 360 modules (*.xex)", "xex"));
+		if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION)
+		{
+			return;
+		}
+		File[] files = chooser.getSelectedFiles();
+		if (files.length == 0 && chooser.getSelectedFile() != null)
+		{
+			files = new File[]{chooser.getSelectedFile()};
+		}
+		List<Path> paths = new ArrayList<>();
+		for (File file : files)
+		{
+			paths.add(file.toPath());
+		}
+		loadFromComputer(paths);
+	}
+
+	private void loadFromComputer(List<Path> paths)
+	{
+		if (paths.isEmpty())
+		{
+			return;
+		}
+		setStatus(paths.size() == 1 ? "Loading module from PC..." : "Loading modules from PC...", WARN);
+		tasks.run("load module from PC", () -> {
+			Map<String, Path> loadedSources = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+			try
+			{
+				for (Path path : paths)
+				{
+					String remotePath = service.loadModuleFromComputer(path);
+					loadedSources.put(remotePath, path.toAbsolutePath().normalize());
+				}
+			}
+			finally
+			{
+				if (!loadedSources.isEmpty())
+				{
+					SwingUtilities.invokeLater(() -> {
+						computerModuleSources.putAll(loadedSources);
+						setStatus(loadedSources.size() == 1 ? "Loaded module from PC"
+							: "Loaded " + loadedSources.size() + " modules from PC", OK);
+						refreshModules();
+					});
+				}
+			}
 		});
 	}
 
@@ -243,6 +321,7 @@ public final class ModuleManagerPanel extends JPanel
 		tasks.run("unload module", () -> {
 			service.unloadModule(name);
 			SwingUtilities.invokeLater(() -> {
+				computerModuleSources.remove(name);
 				setStatus("Unloaded: " + name, OK);
 				refreshModules();
 			});
@@ -260,6 +339,21 @@ public final class ModuleManagerPanel extends JPanel
 		}
 
 		String name = (String) moduleModel.getValueAt(row, 0);
+		Path computerSource = computerModuleSources.get(name);
+		if (computerSource != null)
+		{
+			tasks.run("reload module", () -> {
+				service.unloadModule(name);
+				String remotePath = service.loadModuleFromComputer(computerSource);
+				SwingUtilities.invokeLater(() -> {
+					computerModuleSources.remove(name);
+					computerModuleSources.put(remotePath, computerSource);
+					setStatus("Reloaded: " + computerSource.getFileName(), OK);
+					refreshModules();
+				});
+			});
+			return;
+		}
 		if (!name.startsWith("Hdd:\\") && !name.startsWith("Usb:\\"))
 		{
 			JOptionPane.showMessageDialog(this, "Can only reload modules from Hdd or Usb", "Reload Module",
@@ -274,6 +368,46 @@ public final class ModuleManagerPanel extends JPanel
 				refreshModules();
 			});
 		});
+	}
+
+	private TransferHandler createModuleTransferHandler()
+	{
+		return new TransferHandler()
+		{
+			@Override
+			public boolean canImport(TransferSupport support)
+			{
+				return support.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
+			}
+
+			@Override
+			public boolean importData(TransferSupport support)
+			{
+				if (!canImport(support))
+				{
+					return false;
+				}
+				try
+				{
+					List<?> values = (List<?>) support.getTransferable()
+						.getTransferData(DataFlavor.javaFileListFlavor);
+					List<Path> paths = new ArrayList<>();
+					for (Object value : values)
+					{
+						if (value instanceof File)
+						{
+							paths.add(((File) value).toPath());
+						}
+					}
+					loadFromComputer(paths);
+					return !paths.isEmpty();
+				}
+				catch (UnsupportedFlavorException | IOException failure)
+				{
+					return false;
+				}
+			}
+		};
 	}
 
 	private void spoofTitleId()

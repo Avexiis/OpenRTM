@@ -8,6 +8,7 @@ import openrtm.util.HexUtils;
 
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -308,7 +310,50 @@ public final class ConsoleService
 
 	public synchronized void injectModuleFromConsole(String consolePath)
 	{
-		JRPC.CallVoid(requireConsole(), "xboxkrnl.exe", 409, consolePath, 8, 0, 0);
+		long status = JRPC.Call(requireConsole(), "xboxkrnl.exe", 409, consolePath, 8, 0, 0);
+		long normalizedStatus = status & 0xFFFF_FFFFL;
+		if (normalizedStatus != 0)
+		{
+			throw new IllegalStateException("The console could not load the module (0x"
+				+ Long.toHexString(normalizedStatus).toUpperCase(Locale.ROOT) + ")");
+		}
+	}
+
+	public synchronized String loadModuleFromComputer(Path localPath) throws IOException
+	{
+		validateLocalModule(localPath);
+		String remotePath = temporaryModulePath(localPath);
+		Throwable failure = null;
+		try
+		{
+			uploadFile(localPath, remotePath);
+			injectModuleFromConsole(remotePath);
+		}
+		catch (IOException | RuntimeException loadFailure)
+		{
+			failure = loadFailure;
+			throw loadFailure;
+		}
+		finally
+		{
+			try
+			{
+				deletePath(remotePath, false);
+			}
+			catch (RuntimeException cleanupFailure)
+			{
+				if (failure != null)
+				{
+					failure.addSuppressed(cleanupFailure);
+				}
+				else
+				{
+					throw new IllegalStateException(
+						"The module loaded, but its temporary console copy could not be removed", cleanupFailure);
+				}
+			}
+		}
+		return remotePath;
 	}
 
 	public synchronized void unloadModule(String moduleName)
@@ -334,6 +379,62 @@ public final class ConsoleService
 			Thread.currentThread().interrupt();
 		}
 		injectModuleFromConsole(consolePath);
+	}
+
+	private static void validateLocalModule(Path localPath) throws IOException
+	{
+		if (localPath == null || !Files.isRegularFile(localPath))
+		{
+			throw new IOException("The selected module file does not exist");
+		}
+		String fileName = localPath.getFileName() == null ? "" : localPath.getFileName().toString();
+		if (!fileName.toLowerCase(Locale.ROOT).endsWith(".xex"))
+		{
+			throw new IOException("Select an Xbox 360 module with a .xex file extension");
+		}
+		byte[] signature = new byte[4];
+		try (InputStream input = Files.newInputStream(localPath))
+		{
+			int offset = 0;
+			while (offset < signature.length)
+			{
+				int read = input.read(signature, offset, signature.length - offset);
+				if (read < 0)
+				{
+					break;
+				}
+				offset += read;
+			}
+			if (offset != signature.length)
+			{
+				throw new IOException("The selected file is not an Xbox 360 module");
+			}
+		}
+		boolean xex1 = signature[0] == 'X' && signature[1] == 'E'
+			&& signature[2] == 'X' && signature[3] == '1';
+		boolean xex2 = signature[0] == 'X' && signature[1] == 'E'
+			&& signature[2] == 'X' && signature[3] == '2';
+		if (!xex1 && !xex2)
+		{
+			throw new IOException("The selected file is not an Xbox 360 module");
+		}
+	}
+
+	private static String temporaryModulePath(Path localPath, String identifier)
+	{
+		String fileName = localPath.getFileName() == null ? "module.xex" : localPath.getFileName().toString();
+		String safeName = fileName.replaceAll("[^A-Za-z0-9._-]", "_");
+		if (safeName.length() > 48)
+		{
+			safeName = safeName.substring(safeName.length() - 48);
+		}
+		return "Hdd:\\OpenRTM-" + identifier + "-" + safeName;
+	}
+
+	private static String temporaryModulePath(Path localPath)
+	{
+		String identifier = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+		return temporaryModulePath(localPath, identifier);
 	}
 
 	public synchronized byte[] spoofTitleId(long titleId)
