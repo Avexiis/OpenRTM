@@ -209,6 +209,63 @@ public final class PackageService
 		volume.extractFile(entry, output);
 	}
 
+	public byte[] readInternalFile(Path packageFile, String internalPath) throws IOException
+	{
+		StfsVolume volume = new StfsVolume(packageFile);
+		StfsVolume.Entry entry = volume.find(internalPath);
+		if (entry.directory())
+		{
+			throw new IOException("Select a file inside the package");
+		}
+		return volume.readFile(entry);
+	}
+
+	public SaveResult saveInternalFiles(Path source, Path destination, Map<String, byte[]> replacements,
+	                                    boolean createBackup) throws IOException
+	{
+		Path input = requireFile(source);
+		Path output = requirePath(destination, "Choose an output file");
+		Info original = inspect(input);
+		if (original.signatureType() != SignatureType.CON || !original.stfs())
+		{
+			throw new IOException("Only CON packages with STFS contents can be changed");
+		}
+		if (replacements == null || replacements.isEmpty())
+		{
+			throw new IllegalArgumentException("Choose at least one internal file to change");
+		}
+		Path parent = output.getParent() == null ? Path.of(".").toAbsolutePath() : output.getParent();
+		Files.createDirectories(parent);
+		Path temporary = Files.createTempFile(parent, safePrefix(output.getFileName().toString()), ".openrtm.tmp");
+		Path backup = null;
+		try
+		{
+			Files.copy(input, temporary, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+			new StfsVolume(temporary).rewrite(replacements);
+			resealConPackage(temporary);
+			Info staged = inspect(temporary);
+			if (!staged.headerHashValid() || !Boolean.TRUE.equals(staged.signatureValid()))
+			{
+				throw new IOException("The edited package failed header verification");
+			}
+			if (createBackup && input.equals(output))
+			{
+				backup = input.resolveSibling(input.getFileName() + ".bak");
+				Files.copy(input, backup, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+			}
+			replace(temporary, output);
+			temporary = null;
+			return new SaveResult(inspect(output), backup);
+		}
+		finally
+		{
+			if (temporary != null)
+			{
+				Files.deleteIfExists(temporary);
+			}
+		}
+	}
+
 	public static String recommendedDirectory(Info info, String ownerOverride)
 	{
 		String owner = normalizeId(ownerOverride, 8, null);

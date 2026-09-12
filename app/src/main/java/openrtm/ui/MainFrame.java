@@ -4,6 +4,7 @@ import com.jjrpc.JRPC;
 import openrtm.config.AppSettings;
 import openrtm.console.ConsoleService;
 import openrtm.discord.DiscordRpcService;
+import openrtm.profile.ProfileWorkspace;
 import openrtm.ui.files.FileBrowserPanel;
 import openrtm.util.HexUtils;
 
@@ -56,6 +57,7 @@ public final class MainFrame extends JFrame
 	private final ConsoleService service = new ConsoleService();
 	private final AppSettings settings = new AppSettings();
 	private final DiscordRpcService discordRpc = new DiscordRpcService(service);
+	private final ProfileWorkspace profileWorkspace = new ProfileWorkspace(service);
 	private final CardLayout pages = new CardLayout();
 	private final JPanel pageDeck = new JPanel(pages);
 	private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
@@ -74,6 +76,7 @@ public final class MainFrame extends JFrame
 	private final JLabel status = new JLabel("Disconnected");
 	private FileBrowserPanel fileBrowserPanel;
 	private VideoCapturePanel videoCapturePanel;
+	private FatxBrowserPanel fatxBrowserPanel;
 	private volatile boolean reconnectWanted;
 	private volatile String reconnectHost = "";
 	private ScheduledFuture<?> reconnectFuture;
@@ -125,6 +128,10 @@ public final class MainFrame extends JFrame
 				{
 					videoCapturePanel.shutdown();
 				}
+				if (fatxBrowserPanel != null)
+				{
+					fatxBrowserPanel.shutdown();
+				}
 				executor.shutdownNow();
 				reconnectExecutor.shutdownNow();
 			}
@@ -171,6 +178,11 @@ public final class MainFrame extends JFrame
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
 		addPage(navigationModel, "Content Library", new ContentLibraryPanel(service, this::runTask));
+		addPage(navigationModel, "Gamer Profile", new ProfileEditorPanel(profileWorkspace, this::runTask));
+		addPage(navigationModel, "Add Profile Game", new ProfileGameAdderPanel(profileWorkspace, this::runTask));
+		addPage(navigationModel, "Achievements", new AchievementUnlockerPanel(profileWorkspace, this::runTask));
+		fatxBrowserPanel = new FatxBrowserPanel(this::runTask);
+		addPage(navigationModel, "Xbox Storage", fatxBrowserPanel);
 		addPage(navigationModel, "Package Manager", new PackageManagerPanel(this::runTask));
 		addPage(navigationModel, "ISO Extractor", new IsoToolPanel(this::runTask));
 		addPage(navigationModel, "Game Saves", new GameSaveEditorPanel(this::runTask));

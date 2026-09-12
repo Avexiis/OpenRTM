@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
@@ -197,6 +199,40 @@ public final class ConsoleService
 	public synchronized String currentTitleId()
 	{
 		return HexUtils.hex32(JRPC.XamGetCurrentTitleId(requireConsole())).substring(2);
+	}
+
+	public synchronized int userSigninState(int userIndex)
+	{
+		if (userIndex < 0 || userIndex > 3)
+		{
+			throw new IllegalArgumentException("User index must be between 0 and 3");
+		}
+		long result = JRPC.Call(requireConsole(), JRPC.ThreadType.Title, "xam.xex", 528, userIndex);
+		return (int) result;
+	}
+
+	public synchronized void setProfileSignedIn(String profileId, int userIndex, boolean signedIn)
+	{
+		if (userIndex < 0 || userIndex > 3)
+		{
+			throw new IllegalArgumentException("User index must be between 0 and 3");
+		}
+		String normalized = profileId == null ? "" : profileId.trim();
+		if (!normalized.matches("(?i)[0-9a-f]{16}"))
+		{
+			throw new IllegalArgumentException("Profile ID must contain 16 hexadecimal digits");
+		}
+		byte[] users = new byte[32];
+		long xuid = Long.parseUnsignedLong(normalized, 16);
+		ByteBuffer.wrap(users, userIndex * 8, 8).order(ByteOrder.BIG_ENDIAN).putLong(xuid);
+		int flags = signedIn ? 0x404 : 0x28;
+		long result = JRPC.Call(requireConsole(), JRPC.ThreadType.Title, "xam.xex", 523, users, flags, 0);
+		if ((result & 0xFFFFFFFFL) != 0)
+		{
+			throw new IllegalStateException("The console rejected the profile sign-in change (0x"
+				+ Long.toHexString(result & 0xFFFFFFFFL).toUpperCase(Locale.ROOT) + ")");
+		}
+		JRPC.Call(requireConsole(), JRPC.ThreadType.Title, "xam.xex", 544);
 	}
 
 	public synchronized String systemInfoRaw()

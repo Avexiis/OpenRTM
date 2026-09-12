@@ -6,7 +6,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -103,7 +106,10 @@ final class StfsVolume
 			long firstBlock = uint24le(directory, offset + 0x2F);
 			int parentIndex = uint16be(directory, offset + 0x32);
 			long size = Integer.toUnsignedLong(int32be(directory, offset + 0x34));
-			raw.add(new RawEntry(index, name, isDirectory, contiguous, allocated, firstBlock, parentIndex, size));
+			int created = int32be(directory, offset + 0x38);
+			int accessed = int32be(directory, offset + 0x3C);
+			raw.add(new RawEntry(index, name, isDirectory, contiguous, allocated, firstBlock, parentIndex, size,
+				created, accessed));
 		}
 
 		Map<Integer, RawEntry> byIndex = new HashMap<>();
@@ -113,7 +119,7 @@ final class StfsVolume
 		{
 			String path = buildPath(entry, byIndex);
 			parsed.add(new Entry(path, entry.name(), entry.directory(), entry.contiguous(), entry.allocatedBlocks(),
-				entry.firstBlock(), entry.parentIndex(), entry.size()));
+				entry.firstBlock(), entry.parentIndex(), entry.size(), entry.created(), entry.accessed()));
 		}
 		entries = List.copyOf(parsed);
 		return entries;
@@ -196,6 +202,311 @@ final class StfsVolume
 			}
 			rehashTree(channel, changed);
 			channel.force(true);
+		}
+	}
+
+	void rewrite(Map<String, byte[]> replacements) throws IOException
+	{
+		if (readOnlyFormat)
+		{
+			throw new IOException("Only CON package contents can be changed");
+		}
+		Map<String, byte[]> pending = new HashMap<>();
+		if (replacements != null)
+		{
+			for (Map.Entry<String, byte[]> replacement : replacements.entrySet())
+			{
+				String path = normalizePath(replacement.getKey());
+				if (path.isBlank() || replacement.getValue() == null)
+				{
+					throw new IOException("Internal file replacements require a path and data");
+				}
+				pending.put(path.toLowerCase(Locale.ROOT), replacement.getValue().clone());
+			}
+		}
+
+		List<BuildEntry> buildEntries = new ArrayList<>();
+		for (Entry entry : entries())
+		{
+			byte[] data = null;
+			if (!entry.directory())
+			{
+				String key = normalizePath(entry.path()).toLowerCase(Locale.ROOT);
+				data = pending.remove(key);
+				if (data == null)
+				{
+					data = readFile(entry);
+				}
+			}
+			buildEntries.add(new BuildEntry(entry.path(), entry.name(), entry.directory(), data,
+				entry.created(), entry.accessed()));
+		}
+		for (Map.Entry<String, byte[]> addition : pending.entrySet())
+		{
+			String path = normalizePath(addition.getKey());
+			if (path.contains("/"))
+			{
+				throw new IOException("New internal files can only be added at the package root");
+			}
+			if (path.length() > 40 || !StandardCharsets.US_ASCII.newEncoder().canEncode(path))
+			{
+				throw new IOException("Internal file names must be 40 ASCII characters or fewer");
+			}
+			buildEntries.add(new BuildEntry(path, path, false, addition.getValue(), 0, 0));
+		}
+		writeRebuiltVolume(buildEntries);
+		entries = null;
+	}
+
+	private void writeRebuiltVolume(List<BuildEntry> buildEntries) throws IOException
+	{
+		int directoryBlocks = Math.max(1,
+			Math.toIntExact(((long) buildEntries.size() * DIRECTORY_ENTRY_SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE));
+		long nextBlock = directoryBlocks;
+		for (BuildEntry entry : buildEntries)
+		{
+			if (!entry.directory())
+			{
+				entry.blockCount = Math.toIntExact(((long) entry.data.length + BLOCK_SIZE - 1) / BLOCK_SIZE);
+				entry.firstBlock = entry.blockCount == 0 ? 0 : nextBlock;
+				nextBlock += entry.blockCount;
+			}
+		}
+		if (nextBlock <= 0 || nextBlock > 0xFFFFFFL)
+		{
+			throw new IOException("Rebuilt STFS volume is too large");
+		}
+
+		byte[] directoryData = buildDirectory(buildEntries, directoryBlocks);
+		List<byte[]> logicalBlocks = new ArrayList<>(Math.toIntExact(nextBlock));
+		for (int block = 0; block < directoryBlocks; block++)
+		{
+			logicalBlocks.add(Arrays.copyOfRange(directoryData, block * BLOCK_SIZE, (block + 1) * BLOCK_SIZE));
+		}
+		for (BuildEntry entry : buildEntries)
+		{
+			if (entry.directory())
+			{
+				continue;
+			}
+			for (int block = 0; block < entry.blockCount; block++)
+			{
+				byte[] data = new byte[BLOCK_SIZE];
+				int sourceOffset = block * BLOCK_SIZE;
+				int length = Math.min(BLOCK_SIZE, entry.data.length - sourceOffset);
+				if (length > 0)
+				{
+					System.arraycopy(entry.data, sourceOffset, data, 0, length);
+				}
+				logicalBlocks.add(data);
+			}
+		}
+
+		Path parent = packageFile.getParent() == null ? Path.of(".").toAbsolutePath() : packageFile.getParent();
+		Path staged = Files.createTempFile(parent, "stfs-rebuild-", ".tmp");
+		try
+		{
+			byte[] header;
+			try (FileChannel source = FileChannel.open(packageFile, StandardOpenOption.READ))
+			{
+				header = readExact(source, 0, Math.toIntExact(backingOffset));
+			}
+			int descriptor = PackageService.VOLUME_DESCRIPTOR_OFFSET;
+			header[descriptor + 2] = (byte) (header[descriptor + 2] & ~0x02);
+			putUint16le(header, descriptor + 3, directoryBlocks);
+			putUint24le(header, descriptor + 5, 0);
+			putInt32be(header, descriptor + 28, logicalBlocks.size());
+			putInt32be(header, descriptor + 32, 0);
+
+			try (FileChannel output = FileChannel.open(staged, StandardOpenOption.READ, StandardOpenOption.WRITE,
+				StandardOpenOption.TRUNCATE_EXISTING))
+			{
+				PackageService.write(output, 0, header);
+				for (int logical = 0; logical < logicalBlocks.size(); logical++)
+				{
+					PackageService.write(output, calculatedDataOffset(logical),
+						logicalBlocks.get(logical));
+				}
+				byte[] rootHash = writeHashTree(output, logicalBlocks, directoryBlocks);
+				PackageService.write(output, descriptor + 8L, rootHash);
+				output.force(true);
+			}
+			replaceFile(staged, packageFile);
+			staged = null;
+		}
+		finally
+		{
+			if (staged != null)
+			{
+				Files.deleteIfExists(staged);
+			}
+		}
+	}
+
+	private byte[] buildDirectory(List<BuildEntry> buildEntries, int directoryBlocks) throws IOException
+	{
+		byte[] directory = new byte[directoryBlocks * BLOCK_SIZE];
+		Map<String, Integer> indexes = new HashMap<>();
+		for (int index = 0; index < buildEntries.size(); index++)
+		{
+			indexes.put(normalizePath(buildEntries.get(index).path).toLowerCase(Locale.ROOT), index);
+		}
+		for (int index = 0; index < buildEntries.size(); index++)
+		{
+			BuildEntry entry = buildEntries.get(index);
+			int offset = index * DIRECTORY_ENTRY_SIZE;
+			byte[] name = entry.name.getBytes(StandardCharsets.US_ASCII);
+			if (name.length == 0 || name.length > 40)
+			{
+				throw new IOException("Invalid internal file name: " + entry.name);
+			}
+			System.arraycopy(name, 0, directory, offset, name.length);
+			directory[offset + 0x28] = (byte) (name.length | (entry.directory() ? 0x80 : 0x40));
+			putUint24le(directory, offset + 0x29, entry.blockCount);
+			putUint24le(directory, offset + 0x2C, entry.blockCount);
+			putUint24le(directory, offset + 0x2F, entry.firstBlock);
+			String parentPath = parentPath(entry.path);
+			int parentIndex = 0xFFFF;
+			if (!parentPath.isBlank())
+			{
+				Integer found = indexes.get(parentPath.toLowerCase(Locale.ROOT));
+				if (found == null || !buildEntries.get(found).directory())
+				{
+					throw new IOException("Missing internal parent directory: " + parentPath);
+				}
+				parentIndex = found;
+			}
+			putUint16be(directory, offset + 0x32, parentIndex);
+			putInt32be(directory, offset + 0x34, entry.directory() ? 0 : entry.data.length);
+			putInt32be(directory, offset + 0x38, entry.created);
+			putInt32be(directory, offset + 0x3C, entry.accessed);
+		}
+		return directory;
+	}
+
+	private byte[] writeHashTree(FileChannel output, List<byte[]> blocks, int directoryBlocks) throws IOException
+	{
+		int hierarchy = blocks.size() > BLOCKS_PER_LEVEL[1] ? 2 : blocks.size() > BLOCKS_PER_LEVEL[0] ? 1 : 0;
+		List<byte[]> current = new ArrayList<>();
+		int groups = (blocks.size() + 0xA9) / 0xAA;
+		for (int group = 0; group < groups; group++)
+		{
+			byte[] hashBlock = new byte[BLOCK_SIZE];
+			for (int entry = 0; entry < 0xAA; entry++)
+			{
+				int logical = group * 0xAA + entry;
+				if (logical >= blocks.size())
+				{
+					break;
+				}
+				int offset = entry * HASH_ENTRY_SIZE;
+				System.arraycopy(sha1(blocks.get(logical)), 0, hashBlock, offset, 20);
+				hashBlock[offset + 20] = (byte) 0x80;
+				long next = logical < directoryBlocks - 1 ? logical + 1L : 0xFFFFFFL;
+				putUint24be(hashBlock, offset + 21, next);
+			}
+			long representative = (long) group * 0xAA;
+			PackageService.write(output, calculatedHashOffset(representative, 0, 0), hashBlock);
+			PackageService.write(output, calculatedHashOffset(representative, 0, 1), hashBlock);
+			current.add(hashBlock);
+		}
+		for (int level = 1; level <= hierarchy; level++)
+		{
+			List<byte[]> parents = new ArrayList<>();
+			for (int group = 0; group * 0xAA < current.size(); group++)
+			{
+				byte[] hashBlock = new byte[BLOCK_SIZE];
+				for (int entry = 0; entry < 0xAA && group * 0xAA + entry < current.size(); entry++)
+				{
+					System.arraycopy(sha1(current.get(group * 0xAA + entry)), 0,
+						hashBlock, entry * HASH_ENTRY_SIZE, 20);
+				}
+				long representative = (long) group * BLOCKS_PER_LEVEL[level];
+				PackageService.write(output, calculatedHashOffset(representative, level, 0), hashBlock);
+				PackageService.write(output, calculatedHashOffset(representative, level, 1), hashBlock);
+				parents.add(hashBlock);
+			}
+			current = parents;
+		}
+		return sha1(current.get(0));
+	}
+
+	private long calculatedDataOffset(long logical) throws IOException
+	{
+		long physical = (((logical + BLOCKS_PER_LEVEL[0]) / BLOCKS_PER_LEVEL[0]) << 1) + logical;
+		if (logical >= BLOCKS_PER_LEVEL[0])
+		{
+			physical += ((logical + BLOCKS_PER_LEVEL[1]) / BLOCKS_PER_LEVEL[1]) << 1;
+		}
+		if (logical >= BLOCKS_PER_LEVEL[1])
+		{
+			physical += 2;
+		}
+		return calculatedOffset(physical, 0);
+	}
+
+	private long calculatedHashOffset(long logical, int level, int active) throws IOException
+	{
+		long physical;
+		if (level == 0)
+		{
+			long group0 = logical / BLOCKS_PER_LEVEL[0];
+			physical = group0 * 0xACL;
+			if (group0 > 0)
+			{
+				long group1 = logical / BLOCKS_PER_LEVEL[1];
+				physical += (group1 + 1) << 1;
+				if (group1 > 0)
+				{
+					physical += 2;
+				}
+			}
+		}
+		else if (level == 1)
+		{
+			long group1 = logical / BLOCKS_PER_LEVEL[1];
+			physical = group1 * 0x723AL + (group1 == 0 ? 0xACL : 2L);
+		}
+		else if (level == 2)
+		{
+			physical = 0x723AL;
+		}
+		else
+		{
+			throw new IOException("Invalid STFS hash level");
+		}
+		return calculatedOffset(physical, active);
+	}
+
+	private long calculatedOffset(long physical, int active) throws IOException
+	{
+		try
+		{
+			return Math.addExact(backingOffset,
+				Math.multiplyExact(Math.addExact(physical, active), BLOCK_SIZE));
+		}
+		catch (ArithmeticException failure)
+		{
+			throw new IOException("STFS block offset overflow", failure);
+		}
+	}
+
+	private static String parentPath(String path)
+	{
+		String normalized = normalizePath(path);
+		int split = normalized.lastIndexOf('/');
+		return split < 0 ? "" : normalized.substring(0, split);
+	}
+
+	private static void replaceFile(Path source, Path destination) throws IOException
+	{
+		try
+		{
+			Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+		}
+		catch (AtomicMoveNotSupportedException ignored)
+		{
+			Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING);
 		}
 	}
 
@@ -443,13 +754,71 @@ final class StfsVolume
 		return ByteBuffer.wrap(value, offset, 4).order(ByteOrder.BIG_ENDIAN).getInt();
 	}
 
+	private static void putUint16le(byte[] value, int offset, int number)
+	{
+		value[offset] = (byte) number;
+		value[offset + 1] = (byte) (number >>> 8);
+	}
+
+	private static void putUint16be(byte[] value, int offset, int number)
+	{
+		value[offset] = (byte) (number >>> 8);
+		value[offset + 1] = (byte) number;
+	}
+
+	private static void putUint24le(byte[] value, int offset, long number)
+	{
+		value[offset] = (byte) number;
+		value[offset + 1] = (byte) (number >>> 8);
+		value[offset + 2] = (byte) (number >>> 16);
+	}
+
+	private static void putUint24be(byte[] value, int offset, long number)
+	{
+		value[offset] = (byte) (number >>> 16);
+		value[offset + 1] = (byte) (number >>> 8);
+		value[offset + 2] = (byte) number;
+	}
+
+	private static void putInt32be(byte[] value, int offset, int number)
+	{
+		ByteBuffer.wrap(value, offset, 4).order(ByteOrder.BIG_ENDIAN).putInt(number);
+	}
+
 	record Entry(String path, String name, boolean directory, boolean contiguous, long allocatedBlocks,
-	             long firstBlock, int parentIndex, long size)
+	             long firstBlock, int parentIndex, long size, int created, int accessed)
 	{
 	}
 
 	private record RawEntry(int index, String name, boolean directory, boolean contiguous, long allocatedBlocks,
-	                        long firstBlock, int parentIndex, long size)
+	                        long firstBlock, int parentIndex, long size, int created, int accessed)
 	{
+	}
+
+	private static final class BuildEntry
+	{
+		private final String path;
+		private final String name;
+		private final boolean directory;
+		private final byte[] data;
+		private final int created;
+		private final int accessed;
+		private long firstBlock;
+		private int blockCount;
+
+		private BuildEntry(String path, String name, boolean directory, byte[] data, int created, int accessed)
+		{
+			this.path = path;
+			this.name = name;
+			this.directory = directory;
+			this.data = data;
+			this.created = created;
+			this.accessed = accessed;
+		}
+
+		private boolean directory()
+		{
+			return directory;
+		}
 	}
 }

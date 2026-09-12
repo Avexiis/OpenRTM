@@ -370,7 +370,7 @@ public final class JRPC
 				}
 
 				byte[] hdr = readN(4);
-				long length = readUnsignedIntBigEndian(hdr);
+				long length = readUnsignedIntLittleEndian(hdr);
 				Path parent = localPath.getParent();
 				if (parent != null)
 				{
@@ -423,7 +423,7 @@ public final class JRPC
 					throw new ComException(UIntToInt(0x82DA0007L), "getfile failed: " + first);
 				}
 
-				long remoteLength = readUnsignedIntBigEndian(readN(4));
+				long remoteLength = readUnsignedIntLittleEndian(readN(4));
 				long localLength = Files.size(localPath);
 				if (remoteLength != localLength)
 				{
@@ -481,7 +481,7 @@ public final class JRPC
 					throw new ComException(UIntToInt(0x82DA0007L), "getfile failed: " + first);
 				}
 
-				long remoteLength = readUnsignedIntBigEndian(readN(4));
+				long remoteLength = readUnsignedIntLittleEndian(readN(4));
 				long localLength = Files.size(localPath);
 				long mismatch = -1;
 				long compared = 0;
@@ -541,7 +541,7 @@ public final class JRPC
 					throw new ComException(UIntToInt(0x82DA0007L), "partial getfile failed: " + first);
 				}
 				byte[] hdr = readN(4);
-				long n = readUnsignedIntBigEndian(hdr);
+				long n = readUnsignedIntLittleEndian(hdr);
 				if (n > length)
 				{
 					throw new IOException("Console ignored the partial getfile range");
@@ -754,16 +754,16 @@ public final class JRPC
 			}
 		}
 
-		static long readUnsignedIntBigEndian(byte[] value)
+		static long readUnsignedIntLittleEndian(byte[] value)
 		{
 			if (value == null || value.length != 4)
 			{
 				throw new IllegalArgumentException("Expected a four-byte unsigned integer");
 			}
-			return ((value[0] & 0xFFL) << 24)
-				| ((value[1] & 0xFFL) << 16)
-				| ((value[2] & 0xFFL) << 8)
-				| (value[3] & 0xFFL);
+			return (value[0] & 0xFFL)
+				| ((value[1] & 0xFFL) << 8)
+				| ((value[2] & 0xFFL) << 16)
+				| ((value[3] & 0xFFL) << 24);
 		}
 
 		private static String toHex(byte[] b)
