@@ -86,14 +86,25 @@ public final class ProfileService
 	                                         String titleId, String requestedName,
 	                                         boolean createBackup) throws IOException
 	{
-		requireProfile(source);
 		if (gameDatabase == null || !Files.isRegularFile(gameDatabase))
 		{
 			throw new IOException("Choose a game profile database");
 		}
+		return addGame(source, destination, Files.readAllBytes(gameDatabase), titleId, requestedName,
+			createBackup);
+	}
+
+	public PackageService.SaveResult addGame(Path source, Path destination, byte[] gameDatabase,
+	                                         String titleId, String requestedName,
+	                                         boolean createBackup) throws IOException
+	{
+		requireProfile(source);
+		if (gameDatabase == null || gameDatabase.length == 0)
+		{
+			throw new IOException("Choose a game profile database");
+		}
 		String id = normalizeTitleId(titleId);
-		byte[] gameBytes = Files.readAllBytes(gameDatabase);
-		ProfileDatabase game = new ProfileDatabase(gameBytes);
+		ProfileDatabase game = new ProfileDatabase(gameDatabase);
 		ProfileDatabase dashboard = dashboard(source);
 		long numericId = Long.parseUnsignedLong(id, 16);
 		if (dashboard.contains(ProfileDatabase.TITLES, numericId))
@@ -142,8 +153,9 @@ public final class ProfileService
 		return packages.saveInternalFiles(source, destination, updates, createBackup);
 	}
 
-	public UnlockResult unlock(Path source, Path destination, String titleId, Set<Long> achievementIds,
-	                           boolean online, Instant achievedAt, boolean createBackup) throws IOException
+	public AchievementEditResult editAchievements(Path source, Path destination, String titleId,
+	                                               Set<Long> achievementIds, boolean online, Instant achievedAt,
+	                                               boolean createBackup) throws IOException
 	{
 		requireProfile(source);
 		if (achievementIds == null || achievementIds.isEmpty())
@@ -155,6 +167,8 @@ public final class ProfileService
 		ProfileDatabase dashboard = dashboard(source);
 		ProfileDatabase game = new ProfileDatabase(packages.readInternalFile(source, id + ".gpd"));
 		Set<Long> requested = new LinkedHashSet<>(achievementIds);
+		int matchedCount = 0;
+		int changedCount = 0;
 		int unlockedCount = 0;
 		int addedCredit = 0;
 		long fileTime = online ? fileTime(achievedAt == null ? Instant.now() : achievedAt) : 0;
@@ -165,45 +179,57 @@ public final class ProfileService
 				continue;
 			}
 			Achievement achievement = parseAchievement(record.data());
-			if (achievement.unlocked())
-			{
-				continue;
-			}
+			matchedCount++;
 			byte[] changed = record.data();
 			ByteBuffer values = ByteBuffer.wrap(changed).order(ByteOrder.BIG_ENDIAN);
 			int flags = values.getInt(16);
 			flags &= ~(ACHIEVED_ONLINE | ACHIEVED_OFFLINE | PLATFORM_MASK);
 			flags |= XBOX_360_PLATFORM | (online ? ACHIEVED_ONLINE : ACHIEVED_OFFLINE);
+			if (flags == achievement.flags() && fileTime == achievement.achievedAt())
+			{
+				continue;
+			}
 			values.putInt(16, flags);
 			values.putLong(20, fileTime);
 			game.put(ProfileDatabase.ACHIEVEMENTS, record.id(), changed, true);
-			unlockedCount++;
-			addedCredit = Math.addExact(addedCredit, achievement.credit());
+			changedCount++;
+			if (!achievement.unlocked())
+			{
+				unlockedCount++;
+				addedCredit = Math.addExact(addedCredit, achievement.credit());
+			}
 		}
-		if (unlockedCount == 0)
+		if (matchedCount != requested.size())
 		{
-			throw new IOException("The selected achievements are already unlocked");
+			throw new IOException("One or more selected achievements were not found");
 		}
-		byte[] title = dashboard.data(ProfileDatabase.TITLES, numericId);
-		ByteBuffer titleValues = ByteBuffer.wrap(title).order(ByteOrder.BIG_ENDIAN);
-		int earned = Math.addExact(titleValues.getInt(8), unlockedCount);
-		int credit = Math.addExact(titleValues.getInt(16), addedCredit);
-		if (earned > titleValues.getInt(4) || credit > titleValues.getInt(12))
+		if (changedCount == 0)
 		{
-			throw new IOException("Achievement totals would exceed the game totals");
+			throw new IOException("The selected achievements already use these settings");
 		}
-		titleValues.putInt(8, earned);
-		titleValues.putInt(16, credit);
-		dashboard.put(ProfileDatabase.TITLES, numericId, title, true);
-		incrementIntSetting(dashboard, ACHIEVEMENTS_EARNED, unlockedCount, false);
-		incrementIntSetting(dashboard, CREDIT_EARNED, addedCredit, false);
-		incrementIntSetting(game, TITLE_ACHIEVEMENTS_EARNED, unlockedCount, false);
-		incrementIntSetting(game, TITLE_CREDIT_EARNED, addedCredit, false);
 		Map<String, byte[]> updates = new LinkedHashMap<>();
-		updates.put(DASHBOARD_FILE, dashboard.toByteArray());
+		if (unlockedCount > 0)
+		{
+			byte[] title = dashboard.data(ProfileDatabase.TITLES, numericId);
+			ByteBuffer titleValues = ByteBuffer.wrap(title).order(ByteOrder.BIG_ENDIAN);
+			int earned = Math.addExact(titleValues.getInt(8), unlockedCount);
+			int credit = Math.addExact(titleValues.getInt(16), addedCredit);
+			if (earned > titleValues.getInt(4) || credit > titleValues.getInt(12))
+			{
+				throw new IOException("Achievement totals would exceed the game totals");
+			}
+			titleValues.putInt(8, earned);
+			titleValues.putInt(16, credit);
+			dashboard.put(ProfileDatabase.TITLES, numericId, title, true);
+			incrementIntSetting(dashboard, ACHIEVEMENTS_EARNED, unlockedCount, false);
+			incrementIntSetting(dashboard, CREDIT_EARNED, addedCredit, false);
+			incrementIntSetting(game, TITLE_ACHIEVEMENTS_EARNED, unlockedCount, false);
+			incrementIntSetting(game, TITLE_CREDIT_EARNED, addedCredit, false);
+			updates.put(DASHBOARD_FILE, dashboard.toByteArray());
+		}
 		updates.put(id + ".gpd", game.toByteArray());
 		PackageService.SaveResult saved = packages.saveInternalFiles(source, destination, updates, createBackup);
-		return new UnlockResult(saved, unlockedCount, addedCredit);
+		return new AchievementEditResult(saved, changedCount, unlockedCount, addedCredit);
 	}
 
 	private PackageService.Info requireProfile(Path profile) throws IOException
@@ -677,6 +703,21 @@ public final class ProfileService
 		{
 			return (flags & (ACHIEVED_ONLINE | ACHIEVED_OFFLINE)) != 0;
 		}
+
+		public boolean online()
+		{
+			return (flags & ACHIEVED_ONLINE) != 0;
+		}
+
+		public Instant achievedInstant()
+		{
+			if (achievedAt <= WINDOWS_EPOCH_OFFSET)
+			{
+				return null;
+			}
+			long ticks = achievedAt - WINDOWS_EPOCH_OFFSET;
+			return Instant.ofEpochSecond(ticks / 10_000_000L, ticks % 10_000_000L * 100L);
+		}
 	}
 
 	public static final class Details
@@ -715,15 +756,18 @@ public final class ProfileService
 		}
 	}
 
-	public static final class UnlockResult
+	public static final class AchievementEditResult
 	{
 		private final PackageService.SaveResult saveResult;
+		private final int changedCount;
 		private final int unlockedCount;
 		private final int addedCredit;
 
-		private UnlockResult(PackageService.SaveResult saveResult, int unlockedCount, int addedCredit)
+		private AchievementEditResult(PackageService.SaveResult saveResult, int changedCount,
+		                              int unlockedCount, int addedCredit)
 		{
 			this.saveResult = saveResult;
+			this.changedCount = changedCount;
 			this.unlockedCount = unlockedCount;
 			this.addedCredit = addedCredit;
 		}
@@ -731,6 +775,11 @@ public final class ProfileService
 		public PackageService.SaveResult saveResult()
 		{
 			return saveResult;
+		}
+
+		public int changedCount()
+		{
+			return changedCount;
 		}
 
 		public int unlockedCount()

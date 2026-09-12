@@ -172,8 +172,7 @@ public final class MainFrame extends JFrame
 	{
 		DefaultListModel<String> navigationModel = new DefaultListModel<>();
 		addPage(navigationModel, "Home", dashboardPanel());
-		videoCapturePanel = new VideoCapturePanel();
-		addPage(navigationModel, "Video Capture", videoCapturePanel);
+		addPage(navigationModel, "Video Capture", videoCapturePage());
 		addPage(navigationModel, "Memory & Commands", memoryPanel());
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
@@ -208,6 +207,24 @@ public final class MainFrame extends JFrame
 		shell.add(navScroll, BorderLayout.WEST);
 		shell.add(pageDeck, BorderLayout.CENTER);
 		return shell;
+	}
+
+	private Component videoCapturePage()
+	{
+		try
+		{
+			videoCapturePanel = new VideoCapturePanel();
+			return videoCapturePanel;
+		}
+		catch (LinkageError | RuntimeException failure)
+		{
+			System.err.println("Video capture could not be initialized: " + failure);
+			JPanel panel = page();
+			JLabel unavailable = new JLabel("Video capture is unavailable on this computer.", JLabel.CENTER);
+			unavailable.setForeground(WARN);
+			panel.add(unavailable, BorderLayout.CENTER);
+			return panel;
+		}
 	}
 
 	private void addPage(DefaultListModel<String> navigationModel, String name, Component page)

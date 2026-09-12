@@ -15,6 +15,28 @@ val nativeClassifier = when {
     osName.contains("mac") && (osArchitecture == "aarch64" || osArchitecture == "arm64") -> "macosx-arm64"
     else -> throw GradleException("Video capture is not packaged for $osName $osArchitecture")
 }
+val bundledNativeClassifiers = linkedSetOf("linux-x86_64", "windows-x86_64", nativeClassifier)
+val gpdResources = layout.projectDirectory.dir("src/main/resources/openrtm/gpds")
+val generatedResources = layout.buildDirectory.dir("generated/openrtm-resources")
+
+val generateGpdIndex by tasks.registering {
+    val indexFile = generatedResources.map { it.file("openrtm/gpds/index.txt") }
+    inputs.files(fileTree(gpdResources) {
+        include("*.gpd")
+        include("*.GPD")
+    })
+    outputs.file(indexFile)
+    doLast {
+        val entries = gpdResources.asFile.listFiles()
+            ?.filter { it.isFile && it.extension.equals("gpd", ignoreCase = true) }
+            ?.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+            ?: emptyList()
+        val output = indexFile.get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(entries.joinToString(System.lineSeparator()) { it.name }
+            + System.lineSeparator())
+    }
+}
 
 dependencies {
     implementation(project(":JJRPC"))
@@ -25,16 +47,26 @@ dependencies {
     }
     implementation("org.bytedeco:javacv:1.5.13")
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
-    runtimeOnly("org.bytedeco:javacpp:1.5.13:$nativeClassifier")
-    runtimeOnly("org.bytedeco:ffmpeg:8.0.1-1.5.13:$nativeClassifier")
-    runtimeOnly("org.bytedeco:openblas:0.3.31-1.5.13:$nativeClassifier")
-    runtimeOnly("org.bytedeco:opencv:4.13.0-1.5.13:$nativeClassifier")
+    bundledNativeClassifiers.forEach { classifier ->
+        runtimeOnly("org.bytedeco:javacpp:1.5.13:$classifier")
+        runtimeOnly("org.bytedeco:ffmpeg:8.0.1-1.5.13:$classifier")
+        runtimeOnly("org.bytedeco:openblas:0.3.31-1.5.13:$classifier")
+        runtimeOnly("org.bytedeco:opencv:4.13.0-1.5.13:$classifier")
+    }
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.3")
 }
 
 application {
     mainClass.set("openrtm.Main")
+}
+
+sourceSets.main {
+    resources.srcDir(generatedResources)
+}
+
+tasks.processResources {
+    dependsOn(generateGpdIndex)
 }
 
 tasks.test {

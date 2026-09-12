@@ -4,6 +4,7 @@ import openrtm.profile.ProfileService;
 import openrtm.profile.ProfileWorkspace;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -12,7 +13,9 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSpinner;
 import javax.swing.JTable;
+import javax.swing.SpinnerDateModel;
 import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
@@ -20,8 +23,13 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.FlowLayout;
 import java.nio.file.Path;
+import java.text.ParseException;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -30,14 +38,18 @@ public final class AchievementUnlockerPanel extends JPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
+	private static final DateTimeFormatter UNLOCK_TIME = DateTimeFormatter
+		.ofPattern("MMM d, yyyy h:mm:ss a").withZone(ZoneId.systemDefault());
 	private final ProfileWorkspace workspace;
 	private final TaskRunner tasks;
 	private final JComboBox<ProfileService.Game> game = new JComboBox<>();
-	private final JCheckBox online = new JCheckBox("Unlock as online");
+	private final JCheckBox online = new JCheckBox("Online unlock", true);
+	private final JSpinner dateTime = new JSpinner(
+		new SpinnerDateModel(new Date(), null, null, Calendar.SECOND));
 	private final JLabel summary = new JLabel("Open a gamer profile to load achievements");
 	private final List<ProfileService.Achievement> loaded = new ArrayList<>();
 	private final DefaultTableModel model = new DefaultTableModel(
-		new Object[]{"Select", "Achievement", "Score", "Status", "Description"}, 0)
+		new Object[]{"Select", "Achievement", "Score", "Status", "Unlock Time", "Description"}, 0)
 	{
 		@Override
 		public Class<?> getColumnClass(int columnIndex)
@@ -48,9 +60,10 @@ public final class AchievementUnlockerPanel extends JPanel
 		@Override
 		public boolean isCellEditable(int row, int column)
 		{
-			return column == 0 && row >= 0 && row < loaded.size() && !loaded.get(row).unlocked();
+			return column == 0 && row >= 0 && row < loaded.size();
 		}
 	};
+	private final JTable table = new JTable(model);
 
 	public AchievementUnlockerPanel(ProfileWorkspace workspace, TaskRunner tasks)
 	{
@@ -59,15 +72,28 @@ public final class AchievementUnlockerPanel extends JPanel
 		this.tasks = tasks;
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 		add(header(), BorderLayout.NORTH);
-		JTable table = new JTable(model);
-		table.setFillsViewportHeight(true);
-		table.getColumnModel().getColumn(0).setMaxWidth(62);
-		table.getColumnModel().getColumn(2).setMaxWidth(70);
-		table.getColumnModel().getColumn(3).setMaxWidth(90);
+		configureTable();
 		add(new JScrollPane(table), BorderLayout.CENTER);
 		add(actions(), BorderLayout.SOUTH);
 		game.addActionListener(event -> loadAchievements());
+		online.addActionListener(event -> dateTime.setEnabled(online.isSelected()));
 		workspace.addListener(() -> SwingUtilities.invokeLater(this::workspaceChanged));
+	}
+
+	private void configureTable()
+	{
+		table.setFillsViewportHeight(true);
+		table.getColumnModel().getColumn(0).setMaxWidth(62);
+		table.getColumnModel().getColumn(2).setMaxWidth(70);
+		table.getColumnModel().getColumn(3).setMaxWidth(78);
+		table.getColumnModel().getColumn(4).setPreferredWidth(176);
+		table.getColumnModel().getColumn(4).setMaxWidth(190);
+		table.getSelectionModel().addListSelectionListener(event -> {
+			if (!event.getValueIsAdjusting())
+			{
+				loadSelectedUnlock();
+			}
+		});
 	}
 
 	private JPanel header()
@@ -88,19 +114,28 @@ public final class AchievementUnlockerPanel extends JPanel
 
 	private JPanel actions()
 	{
-		JPanel section = section("Unlock Options");
-		JPanel row = row();
+		JPanel section = section("Unlock Details");
+		JPanel timeRow = row();
+		dateTime.setEditor(new JSpinner.DateEditor(dateTime, "MMM d, yyyy h:mm:ss a"));
+		JButton now = new JButton("Use Current Time");
+		now.addActionListener(event -> dateTime.setValue(new Date()));
+		timeRow.add(online);
+		timeRow.add(new JLabel("Date and time"));
+		timeRow.add(dateTime);
+		timeRow.add(now);
+		section.add(timeRow);
+		section.add(Box.createVerticalStrut(4));
+		JPanel actionRow = row();
 		JButton selectAll = new JButton("Select All Locked");
 		JButton clear = new JButton("Clear Selection");
-		JButton unlock = new JButton("Unlock Selected");
-		selectAll.addActionListener(event -> setSelection(true));
+		JButton apply = new JButton("Apply Changes");
+		selectAll.addActionListener(event -> selectAllLocked());
 		clear.addActionListener(event -> setSelection(false));
-		unlock.addActionListener(event -> unlockSelected());
-		row.add(online);
-		row.add(selectAll);
-		row.add(clear);
-		row.add(unlock);
-		section.add(row);
+		apply.addActionListener(event -> applySelected());
+		actionRow.add(selectAll);
+		actionRow.add(clear);
+		actionRow.add(apply);
+		section.add(actionRow);
 		return section;
 	}
 
@@ -160,25 +195,60 @@ public final class AchievementUnlockerPanel extends JPanel
 			}
 			String description = achievement.unlocked() || achievement.lockedDescription().isEmpty()
 				? achievement.description() : achievement.lockedDescription();
-			model.addRow(new Object[]{false, achievement.name(), achievement.credit(),
-				achievement.unlocked() ? "Unlocked" : "Locked", description});
+			Instant achievedAt = achievement.achievedInstant();
+			String status = achievement.unlocked() ? achievement.online() ? "Online" : "Offline" : "Locked";
+			model.addRow(new Object[]{false, achievement.name(), achievement.credit(), status,
+				achievedAt == null ? "" : UNLOCK_TIME.format(achievedAt), description});
 		}
 		summary.setText(unlocked + " / " + loaded.size() + " unlocked  |  "
 			+ selected.earnedCredit() + " / " + selected.possibleCredit() + " gamerscore");
+	}
+
+	private void loadSelectedUnlock()
+	{
+		int row = table.getSelectedRow();
+		if (row < 0 || row >= loaded.size())
+		{
+			return;
+		}
+		ProfileService.Achievement achievement = loaded.get(row);
+		if (achievement.unlocked())
+		{
+			online.setSelected(achievement.online());
+			Instant achievedAt = achievement.achievedInstant();
+			if (achievedAt != null)
+			{
+				dateTime.setValue(Date.from(achievedAt));
+			}
+		}
+		else
+		{
+			online.setSelected(true);
+			dateTime.setValue(new Date());
+		}
+		dateTime.setEnabled(online.isSelected());
+	}
+
+	private void selectAllLocked()
+	{
+		for (int row = 0; row < loaded.size(); row++)
+		{
+			if (!loaded.get(row).unlocked())
+			{
+				model.setValueAt(true, row, 0);
+			}
+		}
 	}
 
 	private void setSelection(boolean selected)
 	{
 		for (int row = 0; row < loaded.size(); row++)
 		{
-			if (!loaded.get(row).unlocked())
-			{
-				model.setValueAt(selected, row, 0);
-			}
+			model.setValueAt(selected, row, 0);
 		}
 	}
 
-	private void unlockSelected()
+	private void applySelected()
 	{
 		PathSelection selection = selection();
 		if (selection == null)
@@ -196,24 +266,46 @@ public final class AchievementUnlockerPanel extends JPanel
 		}
 		if (selected.isEmpty())
 		{
-			showWarning("Select at least one locked achievement");
+			showWarning("Select at least one achievement");
 			return;
 		}
 		int answer = JOptionPane.showConfirmDialog(this,
-			"Unlock " + selected.size() + " achievement(s) in " + selection.game.name() + "?",
-			"Unlock Achievements", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+			"Apply these unlock details to " + selected.size() + " achievement(s) in "
+				+ selection.game.name() + "?", "Edit Achievements", JOptionPane.YES_NO_OPTION,
+			JOptionPane.WARNING_MESSAGE);
 		if (answer != JOptionPane.YES_OPTION)
 		{
 			return;
 		}
-		tasks.run("unlock achievements", () -> {
-			ProfileService.UnlockResult result = workspace.profiles().unlock(selection.path, selection.path,
-				selection.game.titleId(), selected, online.isSelected(), Instant.now(), true);
+		try
+		{
+			dateTime.commitEdit();
+		}
+		catch (ParseException failure)
+		{
+			showWarning("Enter a valid unlock date and time");
+			return;
+		}
+		boolean onlineUnlock = online.isSelected();
+		Instant achievedAt = ((Date) dateTime.getValue()).toInstant();
+		tasks.run("edit achievements", () -> {
+			ProfileService.AchievementEditResult result = workspace.profiles().editAchievements(
+				selection.path, selection.path, selection.game.titleId(), selected,
+				onlineUnlock, achievedAt, true);
 			workspace.refresh();
-			SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
-				result.unlockedCount() + " achievement(s) unlocked for " + result.addedCredit()
-					+ " gamerscore.", "Achievements", JOptionPane.INFORMATION_MESSAGE));
+			SwingUtilities.invokeLater(() -> showResult(result));
 		});
+	}
+
+	private void showResult(ProfileService.AchievementEditResult result)
+	{
+		String message = result.changedCount() + " achievement(s) updated.";
+		if (result.unlockedCount() > 0)
+		{
+			message += " " + result.unlockedCount() + " newly unlocked for "
+				+ result.addedCredit() + " gamerscore.";
+		}
+		JOptionPane.showMessageDialog(this, message, "Achievements", JOptionPane.INFORMATION_MESSAGE);
 	}
 
 	private PathSelection selection()
