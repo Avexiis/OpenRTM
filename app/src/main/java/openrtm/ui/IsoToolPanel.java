@@ -34,14 +34,12 @@ import java.awt.image.ConvolveOp;
 import java.awt.image.Kernel;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.util.Locale;
 
 public final class IsoToolPanel extends JPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
-	private static final boolean LINUX = System.getProperty("os.name", "")
-		.toLowerCase(Locale.ROOT).contains("linux");
+	private static final boolean SUPPORTED = ExtractXisoService.supportsCurrentPlatform();
 
 	private final TaskRunner tasks;
 	private final ExtractXisoService tool = new ExtractXisoService();
@@ -78,14 +76,14 @@ public final class IsoToolPanel extends JPanel
 		});
 		cancel.setEnabled(false);
 		updateMode();
-		if (LINUX)
+		if (SUPPORTED)
 		{
 			add(content, BorderLayout.CENTER);
 		}
 		else
 		{
 			setEnabledRecursively(content, false);
-			add(new JLayer<>(content, new LinuxRequiredLayer()), BorderLayout.CENTER);
+			add(new JLayer<>(content, new UnsupportedPlatformLayer()), BorderLayout.CENTER);
 		}
 	}
 
@@ -212,7 +210,7 @@ public final class IsoToolPanel extends JPanel
 
 	private void runTool()
 	{
-		if (!LINUX)
+		if (!SUPPORTED)
 		{
 			return;
 		}
@@ -293,7 +291,7 @@ public final class IsoToolPanel extends JPanel
 		}
 	}
 
-	private static final class LinuxRequiredLayer extends LayerUI<JComponent>
+	private static final class UnsupportedPlatformLayer extends LayerUI<JComponent>
 	{
 		private static final float[] BLUR = {
 			0.04f, 0.04f, 0.04f, 0.04f, 0.04f,
@@ -328,7 +326,7 @@ public final class IsoToolPanel extends JPanel
 				RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 			output.setFont(component.getFont().deriveFont(Font.BOLD, 22f));
 			output.setColor(Color.WHITE);
-			String message = "This feature requires Linux!";
+			String message = "ISO tools require 64-bit Windows or Linux";
 			int x = Math.max(12, (width - output.getFontMetrics().stringWidth(message)) / 2);
 			int y = height / 2 + output.getFontMetrics().getAscent() / 2;
 			output.drawString(message, x, y);

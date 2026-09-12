@@ -18,7 +18,8 @@ import java.util.function.Consumer;
 
 public final class ExtractXisoService
 {
-	private static final String RESOURCE = "/openrtm/iso/extract-xiso";
+	private static final String LINUX_RESOURCE = "/openrtm/iso/extract-xiso";
+	private static final String WINDOWS_RESOURCE = "/openrtm/iso/extract-xiso.exe";
 
 	private volatile Process process;
 	private volatile boolean cancelRequested;
@@ -125,22 +126,16 @@ public final class ExtractXisoService
 			return executable;
 		}
 		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-		if (!os.contains("linux"))
-		{
-			throw new IOException("The bundled extract-xiso binary supports Linux x86-64 only");
-		}
 		String architecture = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-		if (!architecture.equals("amd64") && !architecture.equals("x86_64"))
-		{
-			throw new IOException("The bundled extract-xiso binary requires an x86-64 processor");
-		}
+		String resource = resourceFor(os, architecture);
+		boolean windows = os.contains("windows");
 
-		Path extracted = Files.createTempFile("openrtm-extract-xiso-", "");
-		try (InputStream source = ExtractXisoService.class.getResourceAsStream(RESOURCE))
+		Path extracted = Files.createTempFile("openrtm-extract-xiso-", windows ? ".exe" : "");
+		try (InputStream source = ExtractXisoService.class.getResourceAsStream(resource))
 		{
 			if (source == null)
 			{
-				throw new IOException("Missing bundled resource " + RESOURCE);
+				throw new IOException("The ISO component is missing from this installation");
 			}
 			Files.copy(source, extracted, StandardCopyOption.REPLACE_EXISTING);
 		}
@@ -150,25 +145,60 @@ public final class ExtractXisoService
 			throw failure;
 		}
 
-		try
+		if (!windows)
 		{
-			Set<PosixFilePermission> permissions = EnumSet.of(
-				PosixFilePermission.OWNER_READ,
-				PosixFilePermission.OWNER_WRITE,
-				PosixFilePermission.OWNER_EXECUTE);
-			Files.setPosixFilePermissions(extracted, permissions);
-		}
-		catch (UnsupportedOperationException ignored)
-		{
-			if (!extracted.toFile().setExecutable(true, true))
+			try
 			{
-				Files.deleteIfExists(extracted);
-				throw new IOException("Could not make the bundled extract-xiso binary executable");
+				Set<PosixFilePermission> permissions = EnumSet.of(
+					PosixFilePermission.OWNER_READ,
+					PosixFilePermission.OWNER_WRITE,
+					PosixFilePermission.OWNER_EXECUTE);
+				Files.setPosixFilePermissions(extracted, permissions);
+			}
+			catch (UnsupportedOperationException ignored)
+			{
+				if (!extracted.toFile().setExecutable(true, true))
+				{
+					Files.deleteIfExists(extracted);
+					throw new IOException("Could not prepare the ISO component");
+				}
 			}
 		}
 		extracted.toFile().deleteOnExit();
 		executable = extracted;
 		return extracted;
+	}
+
+	public static boolean supportsCurrentPlatform()
+	{
+		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		String architecture = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+		try
+		{
+			String resource = resourceFor(os, architecture);
+			return ExtractXisoService.class.getResource(resource) != null;
+		}
+		catch (IOException unsupported)
+		{
+			return false;
+		}
+	}
+
+	static String resourceFor(String os, String architecture) throws IOException
+	{
+		if (!architecture.equals("amd64") && !architecture.equals("x86_64"))
+		{
+			throw new IOException("The ISO tools require a 64-bit x86 processor");
+		}
+		if (os.contains("windows"))
+		{
+			return WINDOWS_RESOURCE;
+		}
+		if (os.contains("linux"))
+		{
+			return LINUX_RESOURCE;
+		}
+		throw new IOException("The ISO tools support 64-bit Windows and Linux");
 	}
 
 	private static void validate(Request request) throws IOException

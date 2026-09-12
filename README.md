@@ -10,7 +10,6 @@ OpenRTM is intended for RGH, JTAG, and BadUpdate/aBadAvatar consoles. Only use i
 * XBDM.xex and JRPC.xex/JRPC2.xex set as plugins.
 * The IP local address of your console.
 * Java 17 or newer on your computer.
-* A 64-bit Linux to use the bundled ISO extractor - other features should work on other platforms.
 
 ## Starting OpenRTM
 
@@ -160,7 +159,7 @@ To extract a file from a package, select it in the Package Files table and click
 
 ## ISO Extractor
 
-The ISO Extractor page includes the bundled `extract-xiso` tool. It requires 64-bit Linux. On other operating systems, the page is locked and shows a Linux requirement message.
+The ISO Extractor page includes the bundled `extract-xiso` tool for Linux and Windows.
 
 Choose an operation from the list:
 
