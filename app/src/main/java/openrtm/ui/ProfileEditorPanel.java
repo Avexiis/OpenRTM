@@ -15,10 +15,13 @@ import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.FlowLayout;
+import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
@@ -35,7 +38,8 @@ public final class ProfileEditorPanel extends JPanel
 	private final JTextField motto = new JTextField(32);
 	private final JTextField userName = new JTextField(32);
 	private final JTextField location = new JTextField(32);
-	private final JTextArea bio = new JTextArea(4, 32);
+	private final JTextArea bio = new JTextArea(7, 32);
+	private final JLabel bioCount = new JLabel();
 	private final JLabel summary = new JLabel("Open a gamer profile to begin");
 
 	public ProfileEditorPanel(ProfileWorkspace workspace, TaskRunner tasks)
@@ -84,15 +88,44 @@ public final class ProfileEditorPanel extends JPanel
 		label.anchor = GridBagConstraints.NORTHWEST;
 		form.add(new JLabel("Bio"), label);
 		field.gridy = 3;
-		bio.setLineWrap(true);
-		bio.setWrapStyleWord(true);
-		form.add(new JScrollPane(bio), field);
+		bio.setFont(new Font(Font.MONOSPACED, Font.PLAIN, bio.getFont().getSize()));
+		bio.setLineWrap(false);
+		JPanel bioEditor = new JPanel(new BorderLayout(0, 4));
+		bioEditor.add(new JScrollPane(bio), BorderLayout.CENTER);
+		JPanel bioStatus = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+		bioStatus.add(bioCount);
+		bioEditor.add(bioStatus, BorderLayout.SOUTH);
+		form.add(bioEditor, field);
 		section.add(form);
 		JButton save = new JButton("Save Changes");
+		JButton creator = new JButton("Bio Creator");
 		save.addActionListener(event -> saveDetails());
+		creator.addActionListener(event -> BioComposerDialog.showDialog(this, bio.getText(), bio::setText));
 		JPanel actions = row();
+		actions.add(creator);
 		actions.add(save);
 		section.add(actions);
+		bio.getDocument().addDocumentListener(new DocumentListener()
+		{
+			@Override
+			public void changedUpdate(DocumentEvent event)
+			{
+				updateBioCount();
+			}
+
+			@Override
+			public void insertUpdate(DocumentEvent event)
+			{
+				updateBioCount();
+			}
+
+			@Override
+			public void removeUpdate(DocumentEvent event)
+			{
+				updateBioCount();
+			}
+		});
+		updateBioCount();
 		return section;
 	}
 
@@ -208,6 +241,11 @@ public final class ProfileEditorPanel extends JPanel
 		bio.setText(profile.bio());
 		summary.setText(profile.games().size() + " games  |  " + profile.achievements()
 			+ " achievements  |  " + profile.gamerscore() + " gamerscore");
+	}
+
+	private void updateBioCount()
+	{
+		bioCount.setText(bio.getText().length() + " / " + BioComposerDialog.MAX_BIO_CHARACTERS);
 	}
 
 	private static void addField(JPanel panel, GridBagConstraints label, GridBagConstraints field,
