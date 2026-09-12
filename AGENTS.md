@@ -4,7 +4,7 @@
 - Utilize the tool's debugger session for console events if the request involves fixing a console crash, or as-needed when it may be useful. Only do this when you are allowed by the user to connect to the networked console, as described earlier.
 - Never use wildcard imports (ie `java.awt.*`) and instead use single class imports.
 - Never use fully qualified paths inline unless there are conflict errors such as `java.awt.timer` and `javax.swing.timer` used in one class. Prefer imports.
-- Follow `CodeConvention.xml` at the repository root, if present.
+- Follow `CodeConvention.xml` at the repository root, if present. Temporary unit tests do not need to follow this.
 - Remove old unit tests and their folders after use unless the test is user-requested. If the test is user requested, leave it alone.
 - Never write developer focused wording into GUI or the user-facing README. This includes method/class/variable names, as well as memory addresses or anything else targeted at developers.
 - Use US English - not UK English - for both code naming schema and docs.
