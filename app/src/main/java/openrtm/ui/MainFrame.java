@@ -184,7 +184,7 @@ public final class MainFrame extends JFrame
 		kvCheckerPanel = new KvCheckerPanel();
 		addPage(navigationModel, "KV Checker", kvCheckerPanel);
 		addPage(navigationModel, "Gamer Profile", new ProfileEditorPanel(profileWorkspace, this::runTask));
-		addPage(navigationModel, "Add Profile Game", new ProfileGameAdderPanel(profileWorkspace, this::runTask));
+		addPage(navigationModel, "Game Adder", new ProfileGameAdderPanel(profileWorkspace, this::runTask));
 		addPage(navigationModel, "Achievements", new AchievementUnlockerPanel(profileWorkspace, this::runTask));
 		fatxBrowserPanel = new FatxBrowserPanel(this::runTask);
 		addPage(navigationModel, "Xbox Storage", fatxBrowserPanel);
