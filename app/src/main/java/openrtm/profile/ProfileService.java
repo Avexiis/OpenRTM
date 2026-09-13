@@ -44,11 +44,31 @@ public final class ProfileService
 		PackageService.Info packageInfo = requireProfile(profile);
 		ProfileDatabase dashboard = dashboard(profile);
 		List<Game> games = games(profile, dashboard);
-		return new Profile(profile.toAbsolutePath().normalize(), packageInfo.creatorId(), packageInfo.displayName(),
+		String gamertag = gamertag(profile, packageInfo.displayName());
+		return new Profile(profile.toAbsolutePath().normalize(), packageInfo.creatorId(), packageInfo.displayName(), gamertag,
 			readUnicodeSetting(dashboard, MOTTO), readUnicodeSetting(dashboard, USER_NAME),
 			readUnicodeSetting(dashboard, LOCATION), readUnicodeSetting(dashboard, BIO), games,
 			readIntSetting(dashboard, ACHIEVEMENTS_EARNED, sumAchievements(games)),
 			readIntSetting(dashboard, CREDIT_EARNED, sumCredit(games)));
+	}
+
+	public Identity inspectIdentity(Path profile) throws IOException
+	{
+		PackageService.Info packageInfo = requireProfile(profile);
+		return new Identity(packageInfo.creatorId(), gamertag(profile, packageInfo.displayName()));
+	}
+
+	private String gamertag(Path profile, String fallback)
+	{
+		try
+		{
+			return ProfileGamertagReader.read(packages.readInternalFile(profile, "Account"));
+		}
+		catch (IOException ignored)
+		{
+			String value = fallback == null ? "" : fallback.trim();
+			return value.isEmpty() ? "Unknown Profile" : value;
+		}
 	}
 
 	public List<Achievement> achievements(Path profile, String titleId) throws IOException
@@ -504,6 +524,7 @@ public final class ProfileService
 		private final Path path;
 		private final String profileId;
 		private final String displayName;
+		private final String gamertag;
 		private final String motto;
 		private final String userName;
 		private final String location;
@@ -512,12 +533,13 @@ public final class ProfileService
 		private final int achievements;
 		private final int gamerscore;
 
-		private Profile(Path path, String profileId, String displayName, String motto, String userName,
+		private Profile(Path path, String profileId, String displayName, String gamertag, String motto, String userName,
 		                String location, String bio, List<Game> games, int achievements, int gamerscore)
 		{
 			this.path = path;
 			this.profileId = profileId;
 			this.displayName = displayName;
+			this.gamertag = gamertag;
 			this.motto = motto;
 			this.userName = userName;
 			this.location = location;
@@ -540,6 +562,11 @@ public final class ProfileService
 		public String displayName()
 		{
 			return displayName;
+		}
+
+		public String gamertag()
+		{
+			return gamertag;
 		}
 
 		public String motto()
@@ -753,6 +780,28 @@ public final class ProfileService
 		public String bio()
 		{
 			return bio;
+		}
+	}
+
+	public static final class Identity
+	{
+		private final String profileId;
+		private final String gamertag;
+
+		private Identity(String profileId, String gamertag)
+		{
+			this.profileId = profileId;
+			this.gamertag = gamertag;
+		}
+
+		public String profileId()
+		{
+			return profileId;
+		}
+
+		public String gamertag()
+		{
+			return gamertag;
 		}
 	}
 

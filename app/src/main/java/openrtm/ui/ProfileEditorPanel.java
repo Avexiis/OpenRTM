@@ -34,7 +34,7 @@ public final class ProfileEditorPanel extends JPanel
 	private final ProfileWorkspace workspace;
 	private final TaskRunner tasks;
 	private final JTextField source = new JTextField(42);
-	private final JTextField profileId = new JTextField(18);
+	private final ProfileIdField profileId;
 	private final JTextField motto = new JTextField(32);
 	private final JTextField userName = new JTextField(32);
 	private final JTextField location = new JTextField(32);
@@ -47,6 +47,7 @@ public final class ProfileEditorPanel extends JPanel
 		super(new BorderLayout(10, 10));
 		this.workspace = workspace;
 		this.tasks = tasks;
+		profileId = new ProfileIdField(workspace.identities());
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 		add(sourceSection(), BorderLayout.NORTH);
 		add(detailsSection(), BorderLayout.CENTER);
@@ -133,7 +134,7 @@ public final class ProfileEditorPanel extends JPanel
 	{
 		JPanel section = section("Console Transfer");
 		JPanel row = row();
-		row.add(new JLabel("Profile ID"));
+		row.add(new JLabel("Profile"));
 		row.add(profileId);
 		JButton download = new JButton("Download From Console");
 		JButton upload = new JButton("Upload To Console");
@@ -234,7 +235,7 @@ public final class ProfileEditorPanel extends JPanel
 			return;
 		}
 		source.setText(profile.path().toString());
-		profileId.setText(profile.profileId());
+		profileId.setIdentity(profile.profileId(), profile.gamertag());
 		motto.setText(profile.motto());
 		userName.setText(profile.userName());
 		location.setText(profile.location());

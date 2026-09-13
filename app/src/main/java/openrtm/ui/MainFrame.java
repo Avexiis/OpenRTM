@@ -2,8 +2,10 @@ package openrtm.ui;
 
 import com.jjrpc.JRPC;
 import openrtm.config.AppSettings;
+import openrtm.config.ProfileIdentityStore;
 import openrtm.console.ConsoleService;
 import openrtm.discord.DiscordRpcService;
+import openrtm.profile.ProfileIdentityResolver;
 import openrtm.profile.ProfileWorkspace;
 import openrtm.util.HexUtils;
 
@@ -37,6 +39,8 @@ import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -56,9 +60,12 @@ public final class MainFrame extends JFrame
 	private final ConsoleService service = new ConsoleService();
 	private final AppSettings settings = new AppSettings();
 	private final DiscordRpcService discordRpc = new DiscordRpcService(service);
-	private final ProfileWorkspace profileWorkspace = new ProfileWorkspace(service);
+	private final ProfileIdentityStore profileIdentities = new ProfileIdentityStore();
+	private final ProfileIdentityResolver profileResolver = new ProfileIdentityResolver(profileIdentities);
+	private final ProfileWorkspace profileWorkspace = new ProfileWorkspace(service, profileIdentities);
 	private final CardLayout pages = new CardLayout();
 	private final JPanel pageDeck = new JPanel(pages);
+	private final List<DetachablePage> detachablePages = new ArrayList<>();
 	private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
 		Thread thread = new Thread(r, "openrtm-worker");
 		thread.setDaemon(true);
@@ -120,6 +127,7 @@ public final class MainFrame extends JFrame
 			@Override
 			public void windowClosed(WindowEvent e)
 			{
+				detachablePages.forEach(DetachablePage::closeDetached);
 				stopReconnect();
 				service.cancelFileTransfer();
 				discordRpc.close();
@@ -176,21 +184,21 @@ public final class MainFrame extends JFrame
 	{
 		DefaultListModel<String> navigationModel = new DefaultListModel<>();
 		addPage(navigationModel, "Home", dashboardPanel());
-		addPage(navigationModel, "Video Capture", videoCapturePage());
+		addFixedPage(navigationModel, "Video Capture", videoCapturePage());
 		addPage(navigationModel, "Memory & Commands", memoryPanel());
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
-		addPage(navigationModel, "Content Library", new ContentLibraryPanel(service, this::runTask));
+		addPage(navigationModel, "Content Library", new ContentLibraryPanel(service, this::runTask, profileResolver));
 		kvCheckerPanel = new KvCheckerPanel();
 		addPage(navigationModel, "KV Checker", kvCheckerPanel);
 		addPage(navigationModel, "Gamer Profile", new ProfileEditorPanel(profileWorkspace, this::runTask));
 		addPage(navigationModel, "Game Adder", new ProfileGameAdderPanel(profileWorkspace, this::runTask));
 		addPage(navigationModel, "Achievements", new AchievementUnlockerPanel(profileWorkspace, this::runTask));
-		fatxBrowserPanel = new FatxBrowserPanel(this::runTask);
+		fatxBrowserPanel = new FatxBrowserPanel(this::runTask, profileResolver);
 		addPage(navigationModel, "Xbox Storage", fatxBrowserPanel);
-		addPage(navigationModel, "Package Manager", new PackageManagerPanel(this::runTask));
+		addPage(navigationModel, "Package Manager", new PackageManagerPanel(this::runTask, profileResolver));
 		addPage(navigationModel, "ISO Extractor", new IsoToolPanel(this::runTask));
-		addPage(navigationModel, "Game Saves", new GameSaveEditorPanel(this::runTask));
+		addPage(navigationModel, "Game Saves", new GameSaveEditorPanel(this::runTask, profileWorkspace));
 		addPage(navigationModel, "Module Manager", new ModuleManagerPanel(service, this::runTask));
 
 		JList<String> navigation = new JList<>(navigationModel);
@@ -234,6 +242,14 @@ public final class MainFrame extends JFrame
 	}
 
 	private void addPage(DefaultListModel<String> navigationModel, String name, Component page)
+	{
+		navigationModel.addElement(name);
+		DetachablePage detachable = new DetachablePage(name, page);
+		detachablePages.add(detachable);
+		pageDeck.add(detachable, name);
+	}
+
+	private void addFixedPage(DefaultListModel<String> navigationModel, String name, Component page)
 	{
 		navigationModel.addElement(name);
 		pageDeck.add(page, name);
@@ -357,7 +373,7 @@ public final class MainFrame extends JFrame
 
 	private JPanel filesPanel()
 	{
-		fileBrowserPanel = new FileBrowserPanel(service, this::runTask);
+		fileBrowserPanel = new FileBrowserPanel(service, this::runTask, profileResolver);
 		return fileBrowserPanel;
 	}
 

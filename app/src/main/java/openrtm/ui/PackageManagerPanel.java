@@ -1,5 +1,6 @@
 package openrtm.ui;
 
+import openrtm.profile.ProfileIdentityResolver;
 import openrtm.stfs.PackageService;
 
 import javax.imageio.ImageIO;
@@ -52,7 +53,8 @@ public final class PackageManagerPanel extends JPanel
 	private final JTextArea description = new JTextArea(3, 34);
 	private final JTextField publisher = new JTextField(34);
 	private final JTextField titleId = new JTextField(12);
-	private final JTextField profileId = new JTextField(20);
+	private final ProfileIdField profileId;
+	private final ProfileIdentityResolver identities;
 	private final JTextField consoleId = new JTextField(14);
 	private final JTextField deviceId = new JTextField(42);
 	private final JLabel signatureType = new JLabel("-");
@@ -81,10 +83,12 @@ public final class PackageManagerPanel extends JPanel
 	private PackageService.Info loadedInfo;
 	private List<PackageService.InternalEntry> internalEntries = List.of();
 
-	public PackageManagerPanel(TaskRunner tasks)
+	public PackageManagerPanel(TaskRunner tasks, ProfileIdentityResolver identities)
 	{
 		super(new BorderLayout(10, 10));
 		this.tasks = tasks;
+		this.identities = identities;
+		profileId = new ProfileIdField(identities.identities());
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 		add(fileBar(), BorderLayout.NORTH);
 
@@ -126,7 +130,7 @@ public final class PackageManagerPanel extends JPanel
 		addField(fields, row++, "Description", new JScrollPane(description));
 		addField(fields, row++, "Publisher", publisher);
 		addField(fields, row++, "Title ID", titleId);
-		addField(fields, row++, "Profile ID", profileId);
+		addField(fields, row++, "Profile", profileId);
 		addField(fields, row++, "Console ID", consoleId);
 		addField(fields, row++, "Device ID", deviceId);
 		addField(fields, row++, "Header hash", headerStatus);
@@ -236,6 +240,16 @@ public final class PackageManagerPanel extends JPanel
 		status.setText("Opening...");
 		tasks.run("open package", () -> {
 			PackageService.Info info = packages.inspect(requested);
+			if (info.contentType() == 0x00010000)
+			{
+				try
+				{
+					identities.remember(requested);
+				}
+				catch (Exception ignored)
+				{
+				}
+			}
 			List<PackageService.InternalEntry> entries;
 			String contentError = null;
 			try

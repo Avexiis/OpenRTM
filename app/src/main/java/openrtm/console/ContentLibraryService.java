@@ -1,5 +1,6 @@
 package openrtm.console;
 
+import openrtm.profile.ProfileIdentityResolver;
 import openrtm.stfs.PackageService;
 import openrtm.titleids.TitleIds;
 
@@ -18,10 +19,12 @@ public final class ContentLibraryService
 
 	private final ConsoleService console;
 	private final PackageService packages = new PackageService();
+	private final ProfileIdentityResolver identities;
 
-	public ContentLibraryService(ConsoleService console)
+	public ContentLibraryService(ConsoleService console, ProfileIdentityResolver identities)
 	{
 		this.console = console;
+		this.identities = identities;
 	}
 
 	public List<Item> scan(Progress progress)
@@ -35,7 +38,8 @@ public final class ContentLibraryService
 			{
 				continue;
 			}
-			updates.update(owner.equals("0000000000000000") ? "Reading shared content" : "Reading profile " + owner);
+			String ownerName = identities.resolveRemote(console, owner);
+			updates.update("Reading " + ownerName);
 			String ownerPath = ROOT + owner + "\\";
 			for (ConsoleService.FileEntry titleEntry : console.listDirectory(ownerPath))
 			{
@@ -60,7 +64,7 @@ public final class ContentLibraryService
 						if (!packageEntry.directory())
 						{
 							String name = leaf(packageEntry.name());
-							items.add(new Item(owner, titleId, title, type, PackageService.contentTypeName(type),
+							items.add(new Item(owner, ownerName, titleId, title, type, PackageService.contentTypeName(type),
 								name, packageEntry.size(), typePath + name));
 						}
 					}
@@ -96,13 +100,9 @@ public final class ContentLibraryService
 		void update(String message);
 	}
 
-	public record Item(String ownerId, String titleId, String title, int contentType, String contentTypeName,
+	public record Item(String ownerId, String ownerName, String titleId, String title, int contentType, String contentTypeName,
 	                   String fileName, long size, String remotePath)
 	{
-		public String ownerName()
-		{
-			return ownerId.equals("0000000000000000") ? "Shared Content" : ownerId;
-		}
 	}
 
 	public record InstallResult(PackageService.Info packageInfo, String remotePath, boolean existingDestination)

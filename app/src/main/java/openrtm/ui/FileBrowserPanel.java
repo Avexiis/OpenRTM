@@ -1,6 +1,7 @@
 package openrtm.ui;
 
 import openrtm.console.ConsoleService;
+import openrtm.profile.ProfileIdentityResolver;
 import openrtm.stfs.PackageService;
 import openrtm.titleids.TitleIds;
 
@@ -55,11 +56,13 @@ public final class FileBrowserPanel extends JPanel
 	private static final Color ACCENT = new Color(91, 141, 239);
 	private static final Pattern CONTENT_OWNER_PATH = Pattern.compile(
 		"(?i)^Hdd:\\\\Content\\\\[0-9A-F]{16}\\\\?$");
+	private static final Pattern CONTENT_ROOT_PATH = Pattern.compile("(?i)^Hdd:\\\\Content\\\\?$");
 	private static final Pattern CONTENT_TITLE_PATH = Pattern.compile(
 		"(?i)^Hdd:\\\\Content\\\\[0-9A-F]{16}\\\\[0-9A-F]{8}\\\\?$");
 
 	private final ConsoleService service;
 	private final TaskRunner tasks;
+	private final ProfileIdentityResolver identities;
 	private final DefaultMutableTreeNode localRoot = new DefaultMutableTreeNode(BrowserNode.localRoot());
 	private final DefaultMutableTreeNode remoteRoot = new DefaultMutableTreeNode(BrowserNode.remoteRoot());
 	private final DefaultTreeModel localModel = new DefaultTreeModel(localRoot);
@@ -73,11 +76,12 @@ public final class FileBrowserPanel extends JPanel
 	private final JButton cancelTransfer = button("Cancel Transfer");
 	private boolean transferActive;
 
-	public FileBrowserPanel(ConsoleService service, TaskRunner tasks)
+	public FileBrowserPanel(ConsoleService service, TaskRunner tasks, ProfileIdentityResolver identities)
 	{
 		super(new BorderLayout(10, 10));
 		this.service = service;
 		this.tasks = tasks;
+		this.identities = identities;
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 
 		configureTree(localTree, true);
@@ -343,7 +347,7 @@ public final class FileBrowserPanel extends JPanel
 		List<DefaultMutableTreeNode> children = new ArrayList<>();
 		for (ConsoleService.FileEntry entry : entries)
 		{
-			Optional<DisplayAlias> alias = contentAlias(parentPath, entry.name(), entry.directory());
+			Optional<DisplayAlias> alias = displayAlias(parentPath, entry);
 			String displayName = alias.map(DisplayAlias::displayName).orElseGet(() -> displayRemoteName(entry.name()));
 			String path = childRemotePath(parentPath, entry.name());
 			String actualName = alias.map(DisplayAlias::actualName).orElse(null);
@@ -589,7 +593,8 @@ public final class FileBrowserPanel extends JPanel
 			showSelectionError("Drive roots cannot be deleted from the browser");
 			return;
 		}
-		if (JOptionPane.showConfirmDialog(this, remoteEntry.remotePath(), "Delete Remote", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION)
+		if (JOptionPane.showConfirmDialog(this, friendlyRemotePath(remoteEntry.remotePath()),
+			"Delete Remote", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION)
 		{
 			return;
 		}
@@ -637,7 +642,24 @@ public final class FileBrowserPanel extends JPanel
 		BrowserNode local = browserNode(selectedNode(localTree));
 		BrowserNode remote = browserNode(selectedNode(remoteTree));
 		localPath.setText(local != null && local.localEntry() ? local.localPath().toString() : " ");
-		remotePath.setText(remote != null && remote.remoteEntry() ? remote.remotePath() : " ");
+		remotePath.setText(remote != null && remote.remoteEntry() ? friendlyRemotePath(remote.remotePath()) : " ");
+	}
+
+	private String friendlyRemotePath(String path)
+	{
+		String value = path == null ? "" : path.replace('/', '\\');
+		String prefix = "Hdd:\\Content\\";
+		if (!value.regionMatches(true, 0, prefix, 0, prefix.length())
+			|| value.length() < prefix.length() + 16)
+		{
+			return value;
+		}
+		String profileId = value.substring(prefix.length(), prefix.length() + 16).toUpperCase(Locale.ROOT);
+		if (!profileId.matches("[0-9A-F]{16}"))
+		{
+			return value;
+		}
+		return prefix + identities.name(profileId) + value.substring(prefix.length() + 16);
 	}
 
 	private boolean confirmOverwrite(Path destination)
@@ -724,11 +746,23 @@ public final class FileBrowserPanel extends JPanel
 		return ensureRemoteDirectory(parent) + displayRemoteName(normalizedChild);
 	}
 
-	private static String remoteDisplayName(String parentPath, ConsoleService.FileEntry entry)
+	private String remoteDisplayName(String parentPath, ConsoleService.FileEntry entry)
 	{
-		return contentAlias(parentPath, entry.name(), entry.directory())
+		return displayAlias(parentPath, entry)
 			.map(DisplayAlias::displayName)
 			.orElseGet(() -> displayRemoteName(entry.name()));
+	}
+
+	private Optional<DisplayAlias> displayAlias(String parentPath, ConsoleService.FileEntry entry)
+	{
+		String parent = parentPath == null ? "" : parentPath.trim().replace('/', '\\');
+		String actual = displayRemoteName(entry.name()).toUpperCase(Locale.ROOT);
+		if (entry.directory() && CONTENT_ROOT_PATH.matcher(parent).matches()
+			&& actual.matches("[0-9A-F]{16}"))
+		{
+			return Optional.of(new DisplayAlias(identities.resolveRemote(service, actual), actual));
+		}
+		return contentAlias(parentPath, entry.name(), entry.directory());
 	}
 
 	private static Optional<DisplayAlias> contentAlias(String parentPath, String childName, boolean directory)

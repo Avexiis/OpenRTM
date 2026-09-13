@@ -2,6 +2,7 @@ package openrtm.ui;
 
 import openrtm.console.ConsoleService;
 import openrtm.console.ContentLibraryService;
+import openrtm.profile.ProfileIdentityResolver;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -14,9 +15,13 @@ import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.SwingUtilities;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableCellRenderer;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
 import java.awt.FlowLayout;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
@@ -28,7 +33,7 @@ public final class ContentLibraryPanel extends JPanel
 	private final TaskRunner tasks;
 	private final ContentLibraryService library;
 	private final DefaultTableModel model = new DefaultTableModel(
-		new Object[]{"Owner", "Title", "Type", "File", "Size"}, 0)
+		new Object[]{"Owner", "ID", "Title", "Type", "File", "Size"}, 0)
 	{
 		@Override
 		public boolean isCellEditable(int row, int column)
@@ -41,11 +46,11 @@ public final class ContentLibraryPanel extends JPanel
 	private final JProgressBar progress = new JProgressBar();
 	private List<ContentLibraryService.Item> items = List.of();
 
-	public ContentLibraryPanel(ConsoleService console, TaskRunner tasks)
+	public ContentLibraryPanel(ConsoleService console, TaskRunner tasks, ProfileIdentityResolver identities)
 	{
 		super(new BorderLayout(10, 10));
 		this.tasks = tasks;
-		library = new ContentLibraryService(console);
+		library = new ContentLibraryService(console, identities);
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 
 		JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
@@ -64,6 +69,17 @@ public final class ContentLibraryPanel extends JPanel
 
 		table.setAutoCreateRowSorter(true);
 		table.setFillsViewportHeight(true);
+		table.getColumnModel().getColumn(1).setCellRenderer(new IdCellRenderer());
+		table.getColumnModel().getColumn(1).setMinWidth(42);
+		table.getColumnModel().getColumn(1).setMaxWidth(42);
+		table.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseClicked(MouseEvent event)
+			{
+				showOwnerId(event);
+			}
+		});
 		add(new JScrollPane(table), BorderLayout.CENTER);
 		progress.setStringPainted(true);
 		progress.setVisible(false);
@@ -83,12 +99,24 @@ public final class ContentLibraryPanel extends JPanel
 				{
 					String title = item.title().equals(item.titleId())
 						? item.titleId() : item.title() + " [" + item.titleId() + "]";
-					model.addRow(new Object[]{item.ownerName(), title, item.contentTypeName(),
+					model.addRow(new Object[]{item.ownerName(), "ID", title, item.contentTypeName(),
 						item.fileName(), formatSize(item.size())});
 				}
 				status.setText(found.size() + " package(s)");
 			});
 		});
+	}
+
+	private void showOwnerId(MouseEvent event)
+	{
+		int viewRow = table.rowAtPoint(event.getPoint());
+		int viewColumn = table.columnAtPoint(event.getPoint());
+		if (viewRow < 0 || table.convertColumnIndexToModel(viewColumn) != 1)
+		{
+			return;
+		}
+		ContentLibraryService.Item item = items.get(table.convertRowIndexToModel(viewRow));
+		JOptionPane.showMessageDialog(this, item.ownerId(), "Profile ID", JOptionPane.INFORMATION_MESSAGE);
 	}
 
 	private void choosePackages()
@@ -166,5 +194,23 @@ public final class ContentLibraryPanel extends JPanel
 		}
 		while (value >= 1_024.0 && unit < units.length - 1);
 		return String.format(Locale.ROOT, value >= 100 ? "%,.0f %s" : "%,.1f %s", value, units[unit]);
+	}
+
+	private static final class IdCellRenderer extends JButton implements TableCellRenderer
+	{
+		private IdCellRenderer()
+		{
+			super("ID");
+			setFocusable(false);
+		}
+
+		@Override
+		public Component getTableCellRendererComponent(JTable table, Object value, boolean selected,
+		                                               boolean hasFocus, int row, int column)
+		{
+			setBackground(selected ? table.getSelectionBackground() : table.getBackground());
+			setForeground(selected ? table.getSelectionForeground() : table.getForeground());
+			return this;
+		}
 	}
 }

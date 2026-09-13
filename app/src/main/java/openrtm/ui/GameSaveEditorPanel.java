@@ -2,6 +2,8 @@ package openrtm.ui;
 
 import openrtm.config.GameSaveAssignmentStore;
 import openrtm.config.GameSaveAssignmentStore.SavedAssignment;
+import openrtm.config.ProfileIdentityStore;
+import openrtm.profile.ProfileWorkspace;
 import openrtm.stfs.GameSaveService;
 import openrtm.titleids.TitleIds;
 
@@ -45,7 +47,7 @@ public final class GameSaveEditorPanel extends JPanel
 	private final GameSaveAssignmentStore assignments;
 	private final GameSaveService service = new GameSaveService();
 	private final JTextField source = new JTextField(52);
-	private final JTextField profileId = hexField(16, 20);
+	private final ProfileIdField profileId;
 	private final JTextField consoleId = hexField(10, 14);
 	private final JTextField deviceId = hexField(40, 42);
 	private final JLabel titleId = new JLabel("-");
@@ -61,11 +63,13 @@ public final class GameSaveEditorPanel extends JPanel
 	private final JButton saveAs = new JButton("Save As");
 	private Path loadedFile;
 
-	public GameSaveEditorPanel(TaskRunner tasks)
+	public GameSaveEditorPanel(TaskRunner tasks, ProfileWorkspace workspace)
 	{
 		super(new BorderLayout(10, 10));
 		this.tasks = tasks;
-		assignments = new GameSaveAssignmentStore();
+		ProfileIdentityStore identities = workspace.identities();
+		profileId = new ProfileIdField(identities);
+		assignments = new GameSaveAssignmentStore(identities);
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 
 		JPanel content = new JPanel();
@@ -80,6 +84,7 @@ public final class GameSaveEditorPanel extends JPanel
 		saveAs.addActionListener(e -> chooseSaveAs());
 		profiles.addActionListener(e -> useSelectedProfile());
 		refreshProfiles(null);
+		identities.addListener(() -> SwingUtilities.invokeLater(() -> refreshProfiles(profileId.getText())));
 		setEditorEnabled(false);
 	}
 
@@ -114,7 +119,7 @@ public final class GameSaveEditorPanel extends JPanel
 	{
 		JPanel panel = section("Assignment");
 		JPanel fields = fields();
-		addField(fields, 0, "Profile ID", profileId, false);
+		addField(fields, 0, "Profile", profileId, false);
 		addField(fields, 1, "Console ID", consoleId, false);
 		addField(fields, 2, "Device ID", deviceId, false);
 		lockPreferredWidth(fields);
@@ -284,27 +289,11 @@ public final class GameSaveEditorPanel extends JPanel
 		{
 			return;
 		}
-		String suggested = "";
 		try
 		{
-			suggested = assignments.findByProfileId(assignment.profileId())
-				.map(SavedAssignment::label).orElse("");
-		}
-		catch (IllegalArgumentException ignored)
-		{
-		}
-		String label = (String) JOptionPane.showInputDialog(this,
-			"Enter a profile label. Using the gamertag is recommended.", "Save Profile", JOptionPane.PLAIN_MESSAGE,
-			null, null, suggested);
-		if (label == null)
-		{
-			return;
-		}
-		try
-		{
-			SavedAssignment saved = assignments.save(label, assignment);
+			SavedAssignment saved = assignments.save(assignment);
 			refreshProfiles(saved.profileId());
-			operationStatus.setText("Profile saved as " + saved.label());
+			operationStatus.setText("Profile saved as " + saved.gamertag());
 			operationStatus.setForeground(OK);
 		}
 		catch (RuntimeException failure)
@@ -324,7 +313,7 @@ public final class GameSaveEditorPanel extends JPanel
 		profileId.setText(selected.profileId());
 		consoleId.setText(selected.consoleId());
 		deviceId.setText(selected.deviceId());
-		operationStatus.setText("Using profile " + selected.label());
+		operationStatus.setText("Using profile " + selected.gamertag());
 		operationStatus.setForeground(OK);
 	}
 

@@ -1,6 +1,7 @@
 package openrtm.ui;
 
 import openrtm.fatx.FatxDevice;
+import openrtm.profile.ProfileIdentityResolver;
 import openrtm.stfs.PackageService;
 import openrtm.titleids.TitleIds;
 
@@ -35,6 +36,7 @@ import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,6 +46,7 @@ public final class FatxBrowserPanel extends JPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private final TaskRunner tasks;
+	private final ProfileIdentityResolver identities;
 	private final JTextField source = new JTextField(38);
 	private final JComboBox<Path> detected = new JComboBox<>();
 	private final JComboBox<FatxDevice.Partition> partitions = new JComboBox<>();
@@ -53,10 +56,11 @@ public final class FatxBrowserPanel extends JPanel
 	private final JLabel selectedPath = new JLabel(" ");
 	private FatxDevice device;
 
-	public FatxBrowserPanel(TaskRunner tasks)
+	public FatxBrowserPanel(TaskRunner tasks, ProfileIdentityResolver identities)
 	{
 		super(new BorderLayout(10, 10));
 		this.tasks = tasks;
+		this.identities = identities;
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 		configureTree();
 		add(toolbar(), BorderLayout.NORTH);
@@ -124,7 +128,8 @@ public final class FatxBrowserPanel extends JPanel
 		ToolTipManager.sharedInstance().registerComponent(tree);
 		tree.addTreeSelectionListener(event -> {
 			StorageNode selected = selectedNode();
-			selectedPath.setText(selected == null || selected.entry == null ? " " : selected.entry.path());
+			selectedPath.setText(selected == null || selected.entry == null
+				? " " : friendlyStoragePath(selected.entry.path()));
 		});
 		tree.addTreeWillExpandListener(new TreeWillExpandListener()
 		{
@@ -147,6 +152,20 @@ public final class FatxBrowserPanel extends JPanel
 				showActualId(event);
 			}
 		});
+	}
+
+	private String friendlyStoragePath(String path)
+	{
+		if (path == null || !path.startsWith("/") || path.length() < 17)
+		{
+			return path;
+		}
+		String profileId = path.substring(1, 17).toUpperCase(Locale.ROOT);
+		if (!profileId.matches("[0-9A-F]{16}"))
+		{
+			return path;
+		}
+		return "/" + identities.name(profileId) + path.substring(17);
 	}
 
 	private void chooseSource()
@@ -425,13 +444,18 @@ public final class FatxBrowserPanel extends JPanel
 		}
 	}
 
-	private static Alias alias(String parent, FatxDevice.Entry entry)
+	private Alias alias(String parent, FatxDevice.Entry entry)
 	{
 		if (!entry.directory())
 		{
 			return new Alias(entry.name(), null);
 		}
 		String name = entry.name().toUpperCase(Locale.ROOT);
+		if (parent.equals("/") && name.matches("[0-9A-F]{16}")
+			&& entry.partition().name().equals("Content"))
+		{
+			return new Alias(resolveStorageProfile(entry, name), name);
+		}
 		if (parent.matches("(?i)^/[0-9a-f]{16}$") && name.matches("[0-9A-F]{8}"))
 		{
 			String display = TitleIds.displayName(name);
@@ -443,6 +467,50 @@ public final class FatxBrowserPanel extends JPanel
 			return display.startsWith("Unknown") ? new Alias(entry.name(), null) : new Alias(display, name);
 		}
 		return new Alias(entry.name(), null);
+	}
+
+	private String resolveStorageProfile(FatxDevice.Entry owner, String profileId)
+	{
+		String cached = identities.identities().find(profileId).orElse(null);
+		if (cached != null || profileId.equals("0000000000000000"))
+		{
+			return identities.name(profileId);
+		}
+		Path temporary = null;
+		try
+		{
+			FatxDevice.Entry dashboard = child(owner, "FFFE07D1", true);
+			FatxDevice.Entry profileFolder = child(dashboard, "00010000", true);
+			FatxDevice.Entry profile = child(profileFolder, profileId, false);
+			temporary = Files.createTempFile("openrtm-storage-profile-", ".tmp");
+			device.extract(profile, temporary);
+			return identities.remember(temporary);
+		}
+		catch (IOException | RuntimeException ignored)
+		{
+			return "Unknown Profile";
+		}
+		finally
+		{
+			if (temporary != null)
+			{
+				try
+				{
+					Files.deleteIfExists(temporary);
+				}
+				catch (IOException ignored)
+				{
+				}
+			}
+		}
+	}
+
+	private FatxDevice.Entry child(FatxDevice.Entry parent, String name, boolean directory) throws IOException
+	{
+		return device.list(parent).stream()
+			.filter(entry -> entry.directory() == directory && entry.name().equalsIgnoreCase(name))
+			.findFirst()
+			.orElseThrow(() -> new IOException("Profile data was not found"));
 	}
 
 	private static DefaultMutableTreeNode node(StorageNode value)

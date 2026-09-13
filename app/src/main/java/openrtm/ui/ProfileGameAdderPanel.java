@@ -39,7 +39,7 @@ public final class ProfileGameAdderPanel extends JPanel
 	private final ProfileWorkspace workspace;
 	private final TaskRunner tasks;
 	private final ProfileGameCatalog catalog = new ProfileGameCatalog();
-	private final JLabel profile = new JLabel("Open a gamer profile on the Gamer Profile page");
+	private final ProfileIdField profile;
 	private final JLabel catalogStatus = new JLabel("Loading bundled games...");
 	private final JTextField search = new JTextField(32);
 	private final JButton add = new JButton("Add Selected Game");
@@ -56,6 +56,8 @@ public final class ProfileGameAdderPanel extends JPanel
 		super(new BorderLayout(10, 10));
 		this.workspace = workspace;
 		this.tasks = tasks;
+		profile = new ProfileIdField(workspace.identities());
+		profile.setEditable(false);
 		setBorder(BorderFactory.createEmptyBorder(14, 16, 16, 16));
 		add(header(), BorderLayout.NORTH);
 		availableTable = availableTable();
@@ -250,11 +252,11 @@ public final class ProfileGameAdderPanel extends JPanel
 		games.setRowCount(0);
 		if (loaded == null)
 		{
-			profile.setText("Open a gamer profile on the Gamer Profile page");
+			profile.setText("");
 		}
 		else
 		{
-			profile.setText(loaded.displayName() + "  |  " + loaded.profileId());
+			profile.setIdentity(loaded.profileId(), loaded.gamertag());
 			for (ProfileService.Game game : loaded.games())
 			{
 				games.addRow(new Object[]{game.name(), game.titleId(),

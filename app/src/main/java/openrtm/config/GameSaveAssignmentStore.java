@@ -17,11 +17,17 @@ public final class GameSaveAssignmentStore
 	private static final int MAX_ASSIGNMENTS = 64;
 
 	private final ConfigManager config;
+	private final ProfileIdentityStore identities;
 	private final List<SavedAssignment> assignments = new ArrayList<>();
 
 	public GameSaveAssignmentStore()
 	{
-		this(ConfigManager.shared());
+		this(ConfigManager.shared(), new ProfileIdentityStore());
+	}
+
+	public GameSaveAssignmentStore(ProfileIdentityStore identities)
+	{
+		this(ConfigManager.shared(), identities);
 	}
 
 	GameSaveAssignmentStore(Path directory)
@@ -29,16 +35,27 @@ public final class GameSaveAssignmentStore
 		this(new ConfigManager(directory));
 	}
 
-	GameSaveAssignmentStore(ConfigManager config)
+	private GameSaveAssignmentStore(ConfigManager config)
+	{
+		this(config, new ProfileIdentityStore(config));
+	}
+
+	private GameSaveAssignmentStore(ConfigManager config, ProfileIdentityStore identities)
 	{
 		this.config = config;
+		this.identities = identities;
 		load();
+		write();
 	}
 
 	public synchronized List<SavedAssignment> all()
 	{
-		List<SavedAssignment> sorted = new ArrayList<>(assignments);
-		sorted.sort(Comparator.comparing(SavedAssignment::label, String.CASE_INSENSITIVE_ORDER));
+		List<SavedAssignment> sorted = new ArrayList<>();
+		for (SavedAssignment assignment : assignments)
+		{
+			sorted.add(assignment.withGamertag(identities.displayName(assignment.profileId())));
+		}
+		sorted.sort(Comparator.comparing(SavedAssignment::gamertag, String.CASE_INSENSITIVE_ORDER));
 		return sorted;
 	}
 
@@ -54,30 +71,23 @@ public final class GameSaveAssignmentStore
 	public synchronized Optional<SavedAssignment> findByProfileId(String profileId)
 	{
 		String normalized = normalizeId(profileId, 16, "Profile ID");
-		return assignments.stream().filter(saved -> saved.profileId().equals(normalized)).findFirst();
+		return assignments.stream().filter(saved -> saved.profileId().equals(normalized)).findFirst()
+			.map(saved -> saved.withGamertag(identities.displayName(saved.profileId())));
 	}
 
-	public synchronized SavedAssignment save(String label, GameSaveService.Assignment assignment)
+	public synchronized SavedAssignment save(GameSaveService.Assignment assignment)
 	{
 		if (assignment == null)
 		{
 			throw new IllegalArgumentException("Assignment IDs are required");
 		}
-		String name = label == null ? "" : label.trim();
-		if (name.isBlank())
-		{
-			throw new IllegalArgumentException("Enter a label for this profile");
-		}
-		if (name.length() > 64)
-		{
-			throw new IllegalArgumentException("Profile label must be 64 characters or fewer");
-		}
-		SavedAssignment saved = new SavedAssignment(name,
-			normalizeId(assignment.profileId(), 16, "Profile ID"),
+		String profileId = normalizeId(assignment.profileId(), 16, "Profile ID");
+		String gamertag = identities.find(profileId).orElseThrow(() ->
+			new IllegalArgumentException("Open this gamer profile first so its gamertag can be detected"));
+		SavedAssignment saved = new SavedAssignment(gamertag, profileId,
 			normalizeId(assignment.consoleId(), 10, "Console ID"),
 			normalizeId(assignment.deviceId(), 40, "Device ID"));
-		assignments.removeIf(existing -> existing.profileId().equals(saved.profileId())
-			|| existing.label().equalsIgnoreCase(saved.label()));
+		assignments.removeIf(existing -> existing.profileId().equals(saved.profileId()));
 		assignments.add(saved);
 		if (assignments.size() > MAX_ASSIGNMENTS)
 		{
@@ -98,8 +108,8 @@ public final class GameSaveAssignmentStore
 			try
 			{
 				JsonObject assignment = entry.getAsJsonObject();
-				assignments.add(new SavedAssignment(assignment.get("label").getAsString().trim(),
-					normalizeId(assignment.get("profileId").getAsString(), 16, "Profile ID"),
+				String profileId = normalizeId(assignment.get("profileId").getAsString(), 16, "Profile ID");
+				assignments.add(new SavedAssignment(identities.displayName(profileId), profileId,
 					normalizeId(assignment.get("consoleId").getAsString(), 10, "Console ID"),
 					normalizeId(assignment.get("deviceId").getAsString(), 40, "Device ID")));
 			}
@@ -107,7 +117,6 @@ public final class GameSaveAssignmentStore
 			{
 			}
 		}
-		assignments.removeIf(savedAssignment -> savedAssignment.label().isBlank());
 	}
 
 	private void write()
@@ -116,7 +125,6 @@ public final class GameSaveAssignmentStore
 		for (SavedAssignment assignment : all())
 		{
 			JsonObject value = new JsonObject();
-			value.addProperty("label", assignment.label());
 			value.addProperty("profileId", assignment.profileId());
 			value.addProperty("consoleId", assignment.consoleId());
 			value.addProperty("deviceId", assignment.deviceId());
@@ -136,8 +144,13 @@ public final class GameSaveAssignmentStore
 		return normalized;
 	}
 
-	public record SavedAssignment(String label, String profileId, String consoleId, String deviceId)
+	public record SavedAssignment(String gamertag, String profileId, String consoleId, String deviceId)
 	{
+		private SavedAssignment withGamertag(String value)
+		{
+			return new SavedAssignment(value, profileId, consoleId, deviceId);
+		}
+
 		public GameSaveService.Assignment assignment()
 		{
 			return new GameSaveService.Assignment(profileId, consoleId, deviceId);
@@ -153,7 +166,7 @@ public final class GameSaveAssignmentStore
 		@Override
 		public String toString()
 		{
-			return label;
+			return gamertag;
 		}
 	}
 }
