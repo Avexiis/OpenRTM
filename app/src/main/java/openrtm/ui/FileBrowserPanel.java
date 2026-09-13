@@ -50,7 +50,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-public final class FileBrowserPanel extends JPanel
+public final class FileBrowserPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
@@ -96,6 +96,7 @@ public final class FileBrowserPanel extends JPanel
 		split.setResizeWeight(0.5);
 		split.setContinuousLayout(true);
 		add(split, BorderLayout.CENTER);
+		enableFileDrop("Drop files or folders here to use!", this::dropForUpload);
 	}
 
 	private JPanel toolbar()
@@ -132,6 +133,7 @@ public final class FileBrowserPanel extends JPanel
 		transferProgress.setStringPainted(true);
 		transferProgress.setVisible(false);
 		JPanel progress = new JPanel(new BorderLayout(8, 0));
+		progress.add(fileDropHint("Drag and drop PC files or folders to upload"), BorderLayout.WEST);
 		progress.add(transferStatus, BorderLayout.CENTER);
 		progress.add(transferProgress, BorderLayout.EAST);
 
@@ -401,11 +403,6 @@ public final class FileBrowserPanel extends JPanel
 
 	private void uploadSelected()
 	{
-		if (transferActive)
-		{
-			showSelectionError("A file transfer is already running");
-			return;
-		}
 		DefaultMutableTreeNode localNode = selectedNode(localTree);
 		BrowserNode localEntry = browserNode(localNode);
 		if (localEntry == null || !localEntry.localEntry())
@@ -414,34 +411,60 @@ public final class FileBrowserPanel extends JPanel
 			return;
 		}
 
+		uploadPaths(List.of(localEntry.localPath()));
+	}
+
+	private boolean dropForUpload(List<Path> paths)
+	{
+		if (paths.isEmpty() || paths.stream().anyMatch(path ->
+			!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+				&& !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)))
+		{
+			showSelectionError("Drop one or more PC files or folders");
+			return false;
+		}
+		return uploadPaths(paths);
+	}
+
+	private boolean uploadPaths(List<Path> paths)
+	{
+		if (transferActive)
+		{
+			showSelectionError("A file transfer is already running");
+			return false;
+		}
 		DefaultMutableTreeNode remoteDirectoryNode = selectedRemoteDirectoryNode();
 		BrowserNode remoteDirectory = browserNode(remoteDirectoryNode);
 		if (remoteDirectory == null)
 		{
 			showSelectionError("Select a console folder");
-			return;
+			return false;
 		}
-
-		Path localName = localEntry.localPath().getFileName();
-		if (localName == null)
+		if (paths.stream().anyMatch(path -> path.getFileName() == null))
 		{
 			showSelectionError("Filesystem roots cannot be uploaded as folders");
-			return;
+			return false;
 		}
 
-		String remotePath = childRemotePath(ensureRemoteDirectory(remoteDirectory.remotePath()), localName.toString());
-		String label = localEntry.directory() ? "upload folder" : "upload file";
+		String label = paths.size() == 1
+			? Files.isDirectory(paths.get(0), LinkOption.NOFOLLOW_LINKS) ? "upload folder" : "upload file"
+			: "upload files";
 		beginTransfer("Preparing " + label);
 		tasks.run(label, () -> {
 			try
 			{
-				if (localEntry.directory())
+				for (Path path : paths)
 				{
-					service.uploadDirectory(localEntry.localPath(), remotePath, this::updateTransferProgress);
-				}
-				else
-				{
-					service.uploadFile(localEntry.localPath(), remotePath, this::updateTransferProgress);
+					String remotePath = childRemotePath(ensureRemoteDirectory(remoteDirectory.remotePath()),
+						path.getFileName().toString());
+					if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+					{
+						service.uploadDirectory(path, remotePath, this::updateTransferProgress);
+					}
+					else
+					{
+						service.uploadFile(path, remotePath, this::updateTransferProgress);
+					}
 				}
 				List<DefaultMutableTreeNode> children = remoteChildren(remoteDirectory);
 				SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, remoteDirectoryNode, remoteDirectory, children));
@@ -451,6 +474,7 @@ public final class FileBrowserPanel extends JPanel
 				SwingUtilities.invokeLater(this::finishTransfer);
 			}
 		});
+		return true;
 	}
 
 	private void updateTransferProgress(long completed, long total, String message)

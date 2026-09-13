@@ -42,7 +42,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-public final class FatxBrowserPanel extends JPanel
+public final class FatxBrowserPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private final TaskRunner tasks;
@@ -67,6 +67,7 @@ public final class FatxBrowserPanel extends JPanel
 		add(new JScrollPane(tree), BorderLayout.CENTER);
 		add(selectedPath, BorderLayout.SOUTH);
 		refreshDetected();
+		enableFileDrop("Drop files here to use!", this::dropFiles);
 	}
 
 	private JPanel toolbar()
@@ -115,6 +116,7 @@ public final class FatxBrowserPanel extends JPanel
 		actions.add(importFile);
 		actions.add(newFolder);
 		actions.add(delete);
+		actions.add(fileDropHint("Drag and drop PC files to import"));
 		panel.add(open, BorderLayout.NORTH);
 		panel.add(actions, BorderLayout.SOUTH);
 		return panel;
@@ -340,6 +342,39 @@ public final class FatxBrowserPanel extends JPanel
 				SwingUtilities.invokeLater(() -> loadNode(directoryNode));
 			});
 		}
+	}
+
+	private boolean dropFiles(List<Path> paths)
+	{
+		if (paths.isEmpty() || paths.stream().anyMatch(path -> !Files.isRegularFile(path)))
+		{
+			showWarning("Drop one or more PC files");
+			return false;
+		}
+		DefaultMutableTreeNode directoryNode = selectedDirectoryNode();
+		StorageNode directory = storageNode(directoryNode);
+		if (directory == null)
+		{
+			showWarning("Select a destination folder");
+			return false;
+		}
+		String message = paths.size() == 1
+			? "Import " + paths.get(0).getFileName() + " into the selected folder? A same-name file will be replaced."
+			: "Import " + paths.size() + " files into the selected folder? Same-name files will be replaced.";
+		if (JOptionPane.showConfirmDialog(this, message, "Import Files",
+			JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)
+		{
+			return false;
+		}
+		tasks.run("import Xbox storage files", () -> {
+			for (Path path : paths)
+			{
+				device.importFile(directory.entry, path);
+			}
+			directory.loaded = false;
+			SwingUtilities.invokeLater(() -> loadNode(directoryNode));
+		});
+		return true;
 	}
 
 	private void createFolder()

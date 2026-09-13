@@ -35,8 +35,9 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Locale;
+import java.util.List;
 
-public final class GameSaveEditorPanel extends JPanel
+public final class GameSaveEditorPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
@@ -86,6 +87,7 @@ public final class GameSaveEditorPanel extends JPanel
 		refreshProfiles(null);
 		identities.addListener(() -> SwingUtilities.invokeLater(() -> refreshProfiles(profileId.getText())));
 		setEditorEnabled(false);
+		enableFileDrop("Drop a game save here to use!", this::dropGameSave);
 	}
 
 	private JPanel fileSection()
@@ -98,6 +100,7 @@ public final class GameSaveEditorPanel extends JPanel
 		row.add(source);
 		row.add(browse);
 		row.add(open);
+		row.add(fileDropHint("Drag and drop a game save"));
 		panel.add(row);
 		return panel;
 	}
@@ -157,21 +160,32 @@ public final class GameSaveEditorPanel extends JPanel
 	private void openFromField()
 	{
 		String requestedPath = source.getText();
+		Path requested;
+		try
+		{
+			requested = path(requestedPath);
+		}
+		catch (IllegalArgumentException invalidPath)
+		{
+			showFailure("Open failed");
+			String message = requestedPath == null || requestedPath.isBlank()
+				? "Choose a game save" : "Invalid game save path";
+			JOptionPane.showMessageDialog(this, message, "Open Game Save",
+				JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+		openGameSave(requested);
+	}
+
+	private void openGameSave(Path requested)
+	{
 		loadedFile = null;
 		setEditorEnabled(false);
 		setBusy(true, "Opening...");
 		tasks.run("open game save", () -> {
 			try
 			{
-				GameSaveService.Info info;
-				try
-				{
-					info = service.inspect(path(requestedPath));
-				}
-				catch (InvalidPathException invalidPath)
-				{
-					throw new IllegalArgumentException("Invalid game save path", invalidPath);
-				}
+				GameSaveService.Info info = service.inspect(requested);
 				SwingUtilities.invokeLater(() -> showInfo(info, "Ready"));
 			}
 			catch (Exception failure)
@@ -184,6 +198,20 @@ public final class GameSaveEditorPanel extends JPanel
 				SwingUtilities.invokeLater(() -> setBusy(false, null));
 			}
 		});
+	}
+
+	private boolean dropGameSave(List<Path> paths)
+	{
+		if (paths.size() != 1 || !Files.isRegularFile(paths.get(0)))
+		{
+			JOptionPane.showMessageDialog(this, "Drop one game save file", "Open Game Save",
+				JOptionPane.WARNING_MESSAGE);
+			return false;
+		}
+		Path path = paths.get(0);
+		source.setText(path.toString());
+		openGameSave(path);
+		return true;
 	}
 
 	private void chooseSaveAs()

@@ -16,26 +16,24 @@ import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
-import javax.swing.TransferHandler;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
-import java.awt.datatransfer.DataFlavor;
-import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.io.File;
-import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 
-public final class ModuleManagerPanel extends JPanel
+public final class ModuleManagerPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
@@ -83,9 +81,7 @@ public final class ModuleManagerPanel extends JPanel
 		add(createModuleTable(), BorderLayout.CENTER);
 		add(createStatusBar(), BorderLayout.SOUTH);
 		add(createSidePanel(), BorderLayout.EAST);
-		TransferHandler transferHandler = createModuleTransferHandler();
-		setTransferHandler(transferHandler);
-		moduleTable.setTransferHandler(transferHandler);
+		enableFileDrop("Drop an Xbox 360 .xex module here to use!", this::dropModules);
 
 		updateButtons();
 	}
@@ -171,9 +167,10 @@ public final class ModuleManagerPanel extends JPanel
 
 	private JPanel createStatusBar()
 	{
-		JPanel statusBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+		JPanel statusBar = new JPanel(new BorderLayout(8, 4));
 		statusBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, LINE));
-		statusBar.add(statusLabel);
+		statusBar.add(statusLabel, BorderLayout.CENTER);
+		statusBar.add(fileDropHint("Drag and drop .xex modules"), BorderLayout.EAST);
 		return statusBar;
 	}
 
@@ -236,6 +233,24 @@ public final class ModuleManagerPanel extends JPanel
 			paths.add(file.toPath());
 		}
 		loadFromComputer(paths);
+	}
+
+	private boolean dropModules(List<Path> paths)
+	{
+		if (paths.isEmpty() || paths.stream().anyMatch(path -> !validModulePath(path)))
+		{
+			JOptionPane.showMessageDialog(this, "Drop one or more .xex files", "Load Module",
+				JOptionPane.WARNING_MESSAGE);
+			return false;
+		}
+		loadFromComputer(paths);
+		return true;
+	}
+
+	private static boolean validModulePath(Path path)
+	{
+		return Files.isRegularFile(path)
+			&& path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".xex");
 	}
 
 	private void loadFromComputer(List<Path> paths)
@@ -368,46 +383,6 @@ public final class ModuleManagerPanel extends JPanel
 				refreshModules();
 			});
 		});
-	}
-
-	private TransferHandler createModuleTransferHandler()
-	{
-		return new TransferHandler()
-		{
-			@Override
-			public boolean canImport(TransferSupport support)
-			{
-				return support.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
-			}
-
-			@Override
-			public boolean importData(TransferSupport support)
-			{
-				if (!canImport(support))
-				{
-					return false;
-				}
-				try
-				{
-					List<?> values = (List<?>) support.getTransferable()
-						.getTransferData(DataFlavor.javaFileListFlavor);
-					List<Path> paths = new ArrayList<>();
-					for (Object value : values)
-					{
-						if (value instanceof File)
-						{
-							paths.add(((File) value).toPath());
-						}
-					}
-					loadFromComputer(paths);
-					return !paths.isEmpty();
-				}
-				catch (UnsupportedFlavorException | IOException failure)
-				{
-					return false;
-				}
-			}
-		};
 	}
 
 	private void spoofTitleId()

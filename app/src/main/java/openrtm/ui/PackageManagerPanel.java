@@ -38,7 +38,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
-public final class PackageManagerPanel extends JPanel
+public final class PackageManagerPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
@@ -101,6 +101,7 @@ public final class PackageManagerPanel extends JPanel
 		add(split, BorderLayout.CENTER);
 		add(actionBar(), BorderLayout.SOUTH);
 		setEditable(false);
+		enableFileDrop("Drop an Xbox 360 package here to use!", this::dropPackage);
 	}
 
 	private JPanel fileBar()
@@ -114,6 +115,7 @@ public final class PackageManagerPanel extends JPanel
 		panel.add(source);
 		panel.add(browse);
 		panel.add(open);
+		panel.add(fileDropHint("Drag and drop an Xbox 360 package"));
 		return panel;
 	}
 
@@ -237,6 +239,11 @@ public final class PackageManagerPanel extends JPanel
 				JOptionPane.WARNING_MESSAGE);
 			return;
 		}
+		open(requested);
+	}
+
+	private void open(Path requested)
+	{
 		status.setText("Opening...");
 		tasks.run("open package", () -> {
 			PackageService.Info info = packages.inspect(requested);
@@ -265,6 +272,20 @@ public final class PackageManagerPanel extends JPanel
 			String error = contentError;
 			SwingUtilities.invokeLater(() -> showInfo(info, found, error));
 		});
+	}
+
+	private boolean dropPackage(List<Path> paths)
+	{
+		if (paths.size() != 1 || !Files.isRegularFile(paths.get(0)))
+		{
+			JOptionPane.showMessageDialog(this, "Drop one Xbox 360 package file", "Open Package",
+				JOptionPane.WARNING_MESSAGE);
+			return false;
+		}
+		Path path = paths.get(0);
+		source.setText(path.toString());
+		open(path);
+		return true;
 	}
 
 	private void showInfo(PackageService.Info info, List<PackageService.InternalEntry> entries, String contentError)

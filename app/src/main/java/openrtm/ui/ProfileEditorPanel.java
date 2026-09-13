@@ -25,9 +25,12 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.List;
 
-public final class ProfileEditorPanel extends JPanel
+public final class ProfileEditorPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
@@ -53,6 +56,7 @@ public final class ProfileEditorPanel extends JPanel
 		add(detailsSection(), BorderLayout.CENTER);
 		add(transferSection(), BorderLayout.SOUTH);
 		workspace.addListener(() -> SwingUtilities.invokeLater(this::workspaceChanged));
+		enableFileDrop("Drop a gamer profile here to use!", this::dropProfile);
 	}
 
 	private JPanel sourceSection()
@@ -67,6 +71,7 @@ public final class ProfileEditorPanel extends JPanel
 		open.addActionListener(event -> openProfile());
 		row.add(browse);
 		row.add(open);
+		row.add(fileDropHint("Drag and drop a gamer profile"));
 		section.add(row);
 		summary.setAlignmentX(Component.LEFT_ALIGNMENT);
 		section.add(summary);
@@ -168,7 +173,32 @@ public final class ProfileEditorPanel extends JPanel
 			showWarning("Choose a gamer profile");
 			return;
 		}
-		tasks.run("open gamer profile", () -> workspace.open(Path.of(value)));
+		try
+		{
+			openProfile(Path.of(value));
+		}
+		catch (InvalidPathException invalidPath)
+		{
+			showWarning("Profile path is invalid");
+		}
+	}
+
+	private void openProfile(Path path)
+	{
+		tasks.run("open gamer profile", () -> workspace.open(path));
+	}
+
+	private boolean dropProfile(List<Path> paths)
+	{
+		if (paths.size() != 1 || !Files.isRegularFile(paths.get(0)))
+		{
+			showWarning("Drop one gamer profile file");
+			return false;
+		}
+		Path path = paths.get(0);
+		source.setText(path.toString());
+		openProfile(path);
+		return true;
 	}
 
 	private void saveDetails()

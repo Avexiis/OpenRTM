@@ -76,7 +76,7 @@ public final class ContentLibraryService
 
 	public InstallResult install(Path localPackage, ConsoleService.TransferProgress progress) throws IOException
 	{
-		PackageService.Info info = packages.inspect(localPackage);
+		PackageService.Info info = validate(localPackage);
 		String directory = PackageService.recommendedDirectory(info, null);
 		console.ensureDirectory(directory);
 		String name = PackageService.safeRemoteFileName(localPackage.getFileName().toString());
@@ -85,6 +85,20 @@ public final class ContentLibraryService
 		String destination = directory + name;
 		console.uploadFile(localPackage, destination, progress);
 		return new InstallResult(info, destination, exists);
+	}
+
+	public PackageService.Info validate(Path localPackage) throws IOException
+	{
+		PackageService.Info info = packages.inspect(localPackage);
+		if (!info.stfs())
+		{
+			throw new IOException("Package does not contain an STFS volume");
+		}
+		if (!info.headerHashValid() || Boolean.FALSE.equals(info.signatureValid()))
+		{
+			throw new IOException("Package failed integrity validation");
+		}
+		return info;
 	}
 
 	private static String leaf(String path)

@@ -10,6 +10,7 @@ import javax.swing.JComponent;
 import javax.swing.JFileChooser;
 import javax.swing.JLayer;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -33,9 +34,12 @@ import java.awt.image.BufferedImage;
 import java.awt.image.ConvolveOp;
 import java.awt.image.Kernel;
 import java.nio.file.InvalidPathException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Locale;
 
-public final class IsoToolPanel extends JPanel
+public final class IsoToolPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private static final Color ACCENT = new Color(91, 141, 239);
@@ -79,6 +83,7 @@ public final class IsoToolPanel extends JPanel
 		if (SUPPORTED)
 		{
 			add(content, BorderLayout.CENTER);
+			enableFileDrop("Drop an Xbox ISO here to use!", this::dropIso);
 		}
 		else
 		{
@@ -138,6 +143,7 @@ public final class IsoToolPanel extends JPanel
 		options.add(deleteOriginal);
 		options.add(run);
 		options.add(cancel);
+		options.add(fileDropHint("Drag and drop an Xbox ISO"));
 
 		JLabel title = new JLabel("extract-xiso");
 		title.setForeground(ACCENT);
@@ -206,6 +212,28 @@ public final class IsoToolPanel extends JPanel
 			}
 		}
 		output.setText(chooser.getSelectedFile().toPath().toAbsolutePath().normalize().toString());
+	}
+
+	private boolean dropIso(List<Path> paths)
+	{
+		if (paths.size() != 1 || !Files.isRegularFile(paths.get(0)) || !isIso(paths.get(0)))
+		{
+			JOptionPane.showMessageDialog(this, "Drop one .iso or .xiso file", "ISO Extractor",
+				JOptionPane.WARNING_MESSAGE);
+			return false;
+		}
+		if (selectedMode() == ExtractXisoService.Mode.CREATE)
+		{
+			mode.setSelectedItem(ExtractXisoService.Mode.EXTRACT);
+		}
+		source.setText(paths.get(0).toString());
+		return true;
+	}
+
+	private static boolean isIso(Path path)
+	{
+		String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+		return name.endsWith(".iso") || name.endsWith(".xiso");
 	}
 
 	private void runTool()

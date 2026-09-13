@@ -22,12 +22,13 @@ import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
-public final class ContentLibraryPanel extends JPanel
+public final class ContentLibraryPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private final TaskRunner tasks;
@@ -64,6 +65,7 @@ public final class ContentLibraryPanel extends JPanel
 		toolbar.add(refresh);
 		toolbar.add(install);
 		toolbar.add(details);
+		toolbar.add(fileDropHint("Drag and drop content packages"));
 		toolbar.add(status);
 		add(toolbar, BorderLayout.NORTH);
 
@@ -84,6 +86,7 @@ public final class ContentLibraryPanel extends JPanel
 		progress.setStringPainted(true);
 		progress.setVisible(false);
 		add(progress, BorderLayout.SOUTH);
+		enableFileDrop("Drop content packages here to use!", this::dropPackages);
 	}
 
 	private void refresh()
@@ -130,10 +133,19 @@ public final class ContentLibraryPanel extends JPanel
 		}
 		List<Path> selected = Arrays.stream(chooser.getSelectedFiles())
 			.map(file -> file.toPath().toAbsolutePath().normalize()).toList();
+		installPackages(selected);
+	}
+
+	private void installPackages(List<Path> selected)
+	{
 		progress.setVisible(true);
 		progress.setMaximum(Math.max(1, selected.size()));
 		progress.setValue(0);
 		tasks.run("install content packages", () -> {
+			for (Path packageFile : selected)
+			{
+				library.validate(packageFile);
+			}
 			int installed = 0;
 			int existing = 0;
 			for (int index = 0; index < selected.size(); index++)
@@ -160,6 +172,18 @@ public final class ContentLibraryPanel extends JPanel
 			SwingUtilities.invokeLater(() -> status.setText(
 				added + " installed, " + verified + " existing verified"));
 		});
+	}
+
+	private boolean dropPackages(List<Path> paths)
+	{
+		if (paths.isEmpty() || paths.stream().anyMatch(path -> !Files.isRegularFile(path)))
+		{
+			JOptionPane.showMessageDialog(this, "Drop one or more content package files",
+				"Install Packages", JOptionPane.WARNING_MESSAGE);
+			return false;
+		}
+		installPackages(paths);
+		return true;
 	}
 
 	private void showSelectedPath()
