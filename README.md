@@ -14,13 +14,29 @@ Connected-console features require:
 
 The desktop application requires Java 17 or newer. Video capture and the ISO tools are packaged for 64-bit Windows and Linux. Offline tools such as Package Manager, Game Saves, ISO Extractor, and Xbox Storage can be used without connecting to a console.
 
-## Starting OpenRTM
+## Launching OpenRTM
 
-Double-click `OpenRTM.jar`, or start it from a terminal:
+### Windows
 
-```text
-java -jar OpenRTM.jar
+1. Download `OpenRTM_Launcher.exe`.
+2. Open the downloaded file.
+3. Select **Install & Launch** or **Launch OpenRTM**.
+
+### Linux
+
+1. Download the `openrtm` file.
+2. Make it executable and open it:
+
+```sh
+chmod +x openrtm
+./openrtm
 ```
+
+- Installing on either platform makes OpenRTM accessible from the Application/Start menus, and desktop shortcuts.
+- The launcher is a standalone application that is not part of this repository. Its source code is available at:
+https://github.com/Avexiis/OpenRTM-Launcher
+
+## Connection
 
 Enter the console address in the top row and click **Connect**. A successful connection displays `OpenRTM Connected!` on the Xbox 360 and loads console information and storage drives.
 
