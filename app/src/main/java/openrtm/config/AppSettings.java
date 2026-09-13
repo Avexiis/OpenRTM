@@ -84,6 +84,16 @@ public final class AppSettings
 		config.put("discord.richPresence", value);
 	}
 
+	public synchronized String theme()
+	{
+		return config.string("appearance.theme").orElse("synthetica-dark");
+	}
+
+	public synchronized void theme(String value)
+	{
+		config.put("appearance.theme", value);
+	}
+
 	private static Optional<String> clean(String value)
 	{
 		if (value == null)

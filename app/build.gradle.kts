@@ -18,6 +18,17 @@ val nativeClassifier = when {
 val bundledNativeClassifiers = linkedSetOf("linux-x86_64", "windows-x86_64", nativeClassifier)
 val gpdResources = layout.projectDirectory.dir("src/main/resources/openrtm/gpds")
 val generatedResources = layout.buildDirectory.dir("generated/openrtm-resources")
+val syntheticaJvmArgs = listOf(
+    "--add-exports=java.desktop/sun.swing=ALL-UNNAMED",
+    "--add-exports=java.desktop/sun.swing.table=ALL-UNNAMED",
+    "--add-exports=java.desktop/sun.swing.plaf.synth=ALL-UNNAMED",
+    "--add-opens=java.desktop/javax.swing.plaf.synth=ALL-UNNAMED",
+    "--add-opens=java.desktop/javax.swing.plaf.basic=ALL-UNNAMED",
+    "--add-opens=java.desktop/javax.swing=ALL-UNNAMED",
+    "--add-opens=java.desktop/javax.swing.tree=ALL-UNNAMED",
+    "--add-opens=java.desktop/java.awt.event=ALL-UNNAMED",
+    "--add-exports=java.desktop/sun.awt.shell=ALL-UNNAMED"
+)
 
 val generateGpdIndex by tasks.registering {
     val indexFile = generatedResources.map { it.file("openrtm/gpds/index.txt") }
@@ -41,6 +52,14 @@ val generateGpdIndex by tasks.registering {
 dependencies {
     implementation(project(":JJRPC"))
     implementation("com.formdev:flatlaf:3.7.2")
+    implementation(files(rootProject.file("libs/synthetica/synthetica.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaBlackMoon.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaBlueLight.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaBlueSteel.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaDark.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaGreenDream.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaMauveMetallic.jar")))
+    implementation(files(rootProject.file("libs/synthetica/syntheticaOrangeMetallic.jar")))
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("io.github.cdagaming:DiscordIPC:0.11.3") {
         exclude(group = "net.lenni0451", module = "Reflect")
@@ -59,6 +78,11 @@ dependencies {
 
 application {
     mainClass.set("openrtm.Main")
+    applicationDefaultJvmArgs = syntheticaJvmArgs
+}
+
+tasks.withType<JavaExec>().configureEach {
+    jvmArgs(syntheticaJvmArgs)
 }
 
 sourceSets.main {
@@ -71,6 +95,7 @@ tasks.processResources {
 
 tasks.test {
     useJUnitPlatform()
+    jvmArgs(syntheticaJvmArgs)
 }
 
 tasks.named<ShadowJar>("shadowJar") {
@@ -78,8 +103,15 @@ tasks.named<ShadowJar>("shadowJar") {
     archiveVersion.set("")
     archiveClassifier.set("")
     mergeServiceFiles()
+    exclude("module-info.class")
+    exclude("META-INF/versions/*/module-info.class")
     manifest {
         attributes["Main-Class"] = application.mainClass.get()
+        attributes["Add-Exports"] = "java.desktop/sun.swing java.desktop/sun.swing.table " +
+            "java.desktop/sun.swing.plaf.synth java.desktop/sun.awt.shell"
+        attributes["Add-Opens"] = "java.desktop/javax.swing.plaf.synth " +
+            "java.desktop/javax.swing.plaf.basic java.desktop/javax.swing " +
+            "java.desktop/javax.swing.tree java.desktop/java.awt.event"
     }
 }
 

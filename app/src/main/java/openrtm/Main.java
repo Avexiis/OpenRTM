@@ -1,12 +1,12 @@
 package openrtm;
 
-import com.formdev.flatlaf.FlatDarkLaf;
+import openrtm.config.AppSettings;
 import openrtm.console.ConsoleService;
 import openrtm.ui.MainFrame;
 import openrtm.ui.TextUndoSupport;
+import openrtm.ui.ThemeManager;
 
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 import java.util.Map;
 
 public final class Main
@@ -23,10 +23,7 @@ public final class Main
 			return;
 		}
 
-		FlatDarkLaf.setup();
-		UIManager.put("Component.arc", 8);
-		UIManager.put("Button.arc", 8);
-		UIManager.put("TextComponent.arc", 6);
+		ThemeManager.initialize(new AppSettings());
 		TextUndoSupport.install();
 		SwingUtilities.invokeLater(() -> new MainFrame().setVisible(true));
 	}

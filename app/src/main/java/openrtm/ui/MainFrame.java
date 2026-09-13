@@ -77,6 +77,7 @@ public final class MainFrame extends JFrame
 		return thread;
 	});
 	private final JComboBox<String> hostField = hostCombo();
+	private final JComboBox<ThemeManager.Theme> themeSelector = new JComboBox<>(ThemeManager.Theme.values());
 	private final JCheckBox autoConnect = new JCheckBox("Autoconnect", service.autoConnect());
 	private final JCheckBox discordPresence = new JCheckBox("Show Current Title As Discord Rich Presence (RPC)");
 	private final JLabel status = new JLabel("Disconnected");
@@ -88,6 +89,7 @@ public final class MainFrame extends JFrame
 	private volatile String reconnectHost = "";
 	private ScheduledFuture<?> reconnectFuture;
 	private int reconnectDelayIndex;
+	private boolean changingTheme;
 	private final DefaultTableModel infoModel = new DefaultTableModel(new Object[]{"Field", "Value"}, 0)
 	{
 		@Override
@@ -156,8 +158,9 @@ public final class MainFrame extends JFrame
 
 	private JPanel connectionBar()
 	{
-		JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
+		JPanel panel = new JPanel(new BorderLayout());
 		panel.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, LINE));
+		JPanel connection = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
 		JButton connect = button("Connect");
 		JButton disconnect = button("Disconnect");
 		JButton refresh = button("Refresh Info");
@@ -170,14 +173,45 @@ public final class MainFrame extends JFrame
 			SwingUtilities.invokeLater(() -> setStatus("Disconnected", WARN));
 		}));
 		refresh.addActionListener(e -> refreshInfo());
-		panel.add(new JLabel("Console IP"));
-		panel.add(hostField);
-		panel.add(connect);
-		panel.add(disconnect);
-		panel.add(refresh);
-		panel.add(autoConnect);
-		panel.add(status);
+		connection.add(new JLabel("Console IP"));
+		connection.add(hostField);
+		connection.add(connect);
+		connection.add(disconnect);
+		connection.add(refresh);
+		connection.add(autoConnect);
+		connection.add(status);
+		JPanel appearance = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
+		themeSelector.setSelectedItem(ThemeManager.current());
+		themeSelector.setToolTipText("Application theme");
+		themeSelector.addActionListener(event -> {
+			if (!changingTheme)
+			{
+				SwingUtilities.invokeLater(this::changeTheme);
+			}
+		});
+		appearance.add(new JLabel("Theme"));
+		appearance.add(themeSelector);
+		panel.add(connection, BorderLayout.CENTER);
+		panel.add(appearance, BorderLayout.EAST);
 		return panel;
+	}
+
+	private void changeTheme()
+	{
+		if (changingTheme)
+		{
+			return;
+		}
+		ThemeManager.Theme selected = (ThemeManager.Theme) themeSelector.getSelectedItem();
+		if (ThemeManager.apply(selected, settings))
+		{
+			return;
+		}
+		changingTheme = true;
+		themeSelector.setSelectedItem(ThemeManager.current());
+		changingTheme = false;
+		JOptionPane.showMessageDialog(this, "This theme could not be loaded. The previous theme was restored.",
+			"Theme", JOptionPane.WARNING_MESSAGE);
 	}
 
 	private JPanel shell()
