@@ -1,6 +1,6 @@
 # OpenRTM
 
-OpenRTM is a Linux-focused tool for working with a modified Xbox 360 over your local network. It can display and record a video capture device, show console information, send console commands, debug running titles, transfer files and folders, organize installed content, inspect Xbox 360 packages, work with Xbox ISO files, and move game saves between profiles.
+OpenRTM is a multi-platform (Windows & Linux) tool for working with a modified Xbox 360 over your local network. It can display and record a video capture device, show console information, send console commands, debug running titles, transfer files and folders, organize installed content, inspect Xbox 360 packages, work with Xbox ISO files, and move game saves between profiles.
 
 OpenRTM is intended for RGH, JTAG, and BadUpdate/aBadAvatar consoles. Only use it with game backups and files that you legally own.
 
@@ -199,4 +199,4 @@ Currently, the loading only supports injecting modules from the console storage 
 
 ## Platform
 
-OpenRTM was developed on and for Linux. Most features use Java and can work on other platforms, but the bundled ISO tool is a 64-bit Linux program.
+OpenRTM was developed on and primarily for Linux, though it does support Windows.
