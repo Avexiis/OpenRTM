@@ -31,6 +31,7 @@ The desktop application requires Java 17 or newer. Video capture and the ISO too
 chmod +x openrtm
 ./openrtm
 ```
+3. (Optional) Use it without installing, by running `./openrtm` with a terminal in the folder with the binary file.
 
 - Installing on either platform makes OpenRTM accessible from the Application/Start menus, and desktop shortcuts.
 - The launcher is a standalone application that is not part of this repository. Its source code is available at:
