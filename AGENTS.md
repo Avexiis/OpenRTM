@@ -16,7 +16,7 @@ After completing a task, do not declare it done. Instead:
 - Wait for the user to confirm the changes are functional before marking the task complete. A clean launch is not a passing test.
 
 ### Java Usage
-- All code must be Java 11 compatible.
+- All code must be Java 17 compatible.
 - No use of reflection in any circumstance.
 - No executing external processes.
 - No downloading or use of dynamic code loading, including classloading.
