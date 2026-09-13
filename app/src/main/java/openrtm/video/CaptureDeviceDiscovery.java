@@ -4,6 +4,7 @@ import org.bytedeco.ffmpeg.avdevice.AVDeviceInfo;
 import org.bytedeco.ffmpeg.avdevice.AVDeviceInfoList;
 import org.bytedeco.ffmpeg.avformat.AVInputFormat;
 import org.bytedeco.javacpp.BytePointer;
+import org.bytedeco.javacpp.IntPointer;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 
 import javax.sound.sampled.AudioFormat;
@@ -17,8 +18,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -26,6 +29,7 @@ import static org.bytedeco.ffmpeg.global.avdevice.avdevice_free_list_devices;
 import static org.bytedeco.ffmpeg.global.avdevice.avdevice_list_input_sources;
 import static org.bytedeco.ffmpeg.global.avdevice.avdevice_register_all;
 import static org.bytedeco.ffmpeg.global.avformat.av_find_input_format;
+import static org.bytedeco.ffmpeg.global.avutil.AVMEDIA_TYPE_VIDEO;
 
 public final class CaptureDeviceDiscovery
 {
@@ -47,6 +51,10 @@ public final class CaptureDeviceDiscovery
 		{
 			return linuxVideoDevices();
 		}
+		if (isWindows())
+		{
+			return windowsVideoDevices();
+		}
 		List<VideoDevice> devices = new ArrayList<>();
 		for (int index = 0; index < 8; index++)
 		{
@@ -54,6 +62,79 @@ public final class CaptureDeviceDiscovery
 			devices.add(new VideoDevice("index:" + index, name, Integer.toString(index), index));
 		}
 		return devices;
+	}
+
+	private static List<VideoDevice> windowsVideoDevices()
+	{
+		List<VideoDevice> devices = new ArrayList<>();
+		AVDeviceInfoList sourceList = new AVDeviceInfoList();
+		Set<String> identifiers = new LinkedHashSet<>();
+		boolean listed = false;
+		try
+		{
+			FFmpegFrameGrabber.tryLoad();
+			avdevice_register_all();
+			AVInputFormat directShow = av_find_input_format("dshow");
+			if (directShow == null || directShow.isNull())
+			{
+				return devices;
+			}
+			int result = avdevice_list_input_sources(directShow, (String) null, null, sourceList);
+			if (result < 0)
+			{
+				return devices;
+			}
+			listed = true;
+			for (int sourceIndex = 0; sourceIndex < sourceList.nb_devices(); sourceIndex++)
+			{
+				AVDeviceInfo info = sourceList.devices(sourceIndex);
+				if (!providesVideo(info))
+				{
+					continue;
+				}
+				String identifier = pointerText(info.device_name()).trim();
+				if (identifier.isEmpty() || !identifiers.add(identifier))
+				{
+					continue;
+				}
+				String description = pointerText(info.device_description()).trim();
+				String displayName = description.isEmpty() ? identifier : description;
+				devices.add(new VideoDevice("dshow:" + identifier, displayName, identifier, devices.size()));
+			}
+		}
+		catch (Throwable ignored)
+		{
+			devices.clear();
+		}
+		finally
+		{
+			if (listed)
+			{
+				avdevice_free_list_devices(sourceList);
+			}
+		}
+		return devices;
+	}
+
+	private static boolean providesVideo(AVDeviceInfo info)
+	{
+		if (info == null || info.isNull() || info.nb_media_types() <= 0)
+		{
+			return false;
+		}
+		IntPointer mediaTypes = info.media_types();
+		if (mediaTypes == null || mediaTypes.isNull())
+		{
+			return false;
+		}
+		for (int index = 0; index < info.nb_media_types(); index++)
+		{
+			if (mediaTypes.get(index) == AVMEDIA_TYPE_VIDEO)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static List<AudioDevice> audioDevices()
@@ -362,5 +443,10 @@ public final class CaptureDeviceDiscovery
 	private static boolean isLinux()
 	{
 		return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("linux");
+	}
+
+	private static boolean isWindows()
+	{
+		return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows");
 	}
 }
