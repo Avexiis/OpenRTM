@@ -3,6 +3,7 @@ package openrtm.ui;
 import javax.swing.BorderFactory;
 import javax.swing.Icon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -15,6 +16,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Cursor;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Frame;
 import java.awt.Graphics;
@@ -41,7 +43,7 @@ final class DetachablePage extends JPanel
 	private final JPanel host = new JPanel(new BorderLayout());
 	private DetachedWindow window;
 
-	DetachablePage(String title, Component content)
+	DetachablePage(String title, Component content, JCheckBox discordPresence)
 	{
 		super(new BorderLayout());
 		this.title = title;
@@ -52,7 +54,10 @@ final class DetachablePage extends JPanel
 		detach.addActionListener(event -> detach());
 		JPanel toolbar = new JPanel(new BorderLayout());
 		toolbar.setBorder(BorderFactory.createEmptyBorder(5, 6, 0, 6));
-		toolbar.add(detach, BorderLayout.EAST);
+		JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+		actions.add(discordPresence);
+		actions.add(detach);
+		toolbar.add(actions, BorderLayout.EAST);
 		host.add(content, BorderLayout.CENTER);
 		add(toolbar, BorderLayout.NORTH);
 		add(host, BorderLayout.CENTER);

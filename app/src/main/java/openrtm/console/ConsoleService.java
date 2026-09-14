@@ -6,6 +6,7 @@ import openrtm.config.AppSettings;
 import openrtm.titleids.TitleIds;
 import openrtm.util.HexUtils;
 
+import java.awt.image.BufferedImage;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -300,6 +301,11 @@ public final class ConsoleService
 		rawCommand("dvdeject eject=" + (eject ? "1" : "0"));
 	}
 
+	public synchronized BufferedImage captureScreenshot() throws IOException
+	{
+		return requireXbdm().CaptureScreenshot().toImage();
+	}
+
 	public synchronized List<ModuleInfo> listModules()
 	{
 		return parseModules(rawCommand("modules"));
@@ -576,6 +582,16 @@ public final class ConsoleService
 	public synchronized void writeInt32LE(long address, int value)
 	{
 		writeMemory(address, HexUtils.int32Little(value));
+	}
+
+	public synchronized void callTitleVoid(long address, Object... arguments)
+	{
+		JRPC.CallVoid(requireConsole(), JRPC.ThreadType.Title, address, arguments);
+	}
+
+	public synchronized long callTitle(long address, Object... arguments)
+	{
+		return JRPC.Call(requireConsole(), JRPC.ThreadType.Title, address, arguments);
 	}
 
 	public synchronized void writeAsciiNull(long address, String value)

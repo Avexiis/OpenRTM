@@ -11,6 +11,7 @@ import openrtm.util.HexUtils;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.ButtonModel;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -25,6 +26,7 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
@@ -79,7 +81,7 @@ public final class MainFrame extends JFrame
 	private final JComboBox<String> hostField = hostCombo();
 	private final JComboBox<ThemeManager.Theme> themeSelector = new JComboBox<>(ThemeManager.Theme.values());
 	private final JCheckBox autoConnect = new JCheckBox("Autoconnect", service.autoConnect());
-	private final JCheckBox discordPresence = new JCheckBox("Show Current Title As Discord Rich Presence (RPC)");
+	private final ButtonModel discordPresence = new JToggleButton.ToggleButtonModel();
 	private final JLabel status = new JLabel("Disconnected");
 	private FileBrowserPanel fileBrowserPanel;
 	private VideoCapturePanel videoCapturePanel;
@@ -221,6 +223,7 @@ public final class MainFrame extends JFrame
 		addPage(navigationModel, "Home", dashboardPanel());
 		addFixedPage(navigationModel, "Video Capture", videoCapturePage());
 		addPage(navigationModel, "Memory & Commands", memoryPanel());
+		addPage(navigationModel, "COD Options", new CodOptionsPanel(service, this::runTask));
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
 		addPage(navigationModel, "Content Library", new ContentLibraryPanel(service, this::runTask, profileResolver));
@@ -279,7 +282,7 @@ public final class MainFrame extends JFrame
 	private void addPage(DefaultListModel<String> navigationModel, String name, Component page)
 	{
 		navigationModel.addElement(name);
-		DetachablePage detachable = new DetachablePage(name, page);
+		DetachablePage detachable = new DetachablePage(name, page, discordPresenceToggle());
 		detachablePages.add(detachable);
 		pageDeck.add(detachable, name);
 	}
@@ -287,7 +290,13 @@ public final class MainFrame extends JFrame
 	private void addFixedPage(DefaultListModel<String> navigationModel, String name, Component page)
 	{
 		navigationModel.addElement(name);
-		pageDeck.add(page, name);
+		JPanel fixedPage = new JPanel(new BorderLayout());
+		JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 5));
+		toolbar.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 6));
+		toolbar.add(discordPresenceToggle());
+		fixedPage.add(toolbar, BorderLayout.NORTH);
+		fixedPage.add(page, BorderLayout.CENTER);
+		pageDeck.add(fixedPage, name);
 	}
 
 	private JPanel dashboardPanel()
@@ -297,18 +306,19 @@ public final class MainFrame extends JFrame
 		JTable info = new JTable(infoModel);
 		info.setFillsViewportHeight(true);
 		JScrollPane tableScroll = new JScrollPane(info);
-		tableScroll.setPreferredSize(new Dimension(700, 260));
+		tableScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
 		JPanel infoSection = section("Console Info");
 		infoSection.add(tableScroll);
-		panel.add(infoSection, BorderLayout.CENTER);
-
-		JPanel discord = section("Discord");
-		JPanel discordRow = row();
-		discordRow.add(discordPresence);
-		discord.add(discordRow);
+		JPanel plugins = section("Dashlaunch Plugins");
+		plugins.add(new DashlaunchPluginPanel(this, service, this::runTask));
+		JPanel center = new JPanel(new GridLayout(2, 1, 0, 8));
+		center.add(infoSection);
+		center.add(plugins);
+		panel.add(center, BorderLayout.CENTER);
 
 		JPanel controls = section("Console Controls");
-		JPanel grid = new JPanel(new GridLayout(0, 3, 8, 8));
+		JPanel grid = new JPanel(new GridLayout(0, 4, 8, 8));
+		grid.setAlignmentX(Component.LEFT_ALIGNMENT);
 		addAction(grid, "XNotify", () -> {
 			String message = JOptionPane.showInputDialog(this, "Message", "OpenRTM");
 			if (message != null)
@@ -321,14 +331,22 @@ public final class MainFrame extends JFrame
 		addAction(grid, "Shutdown", service::shutdown);
 		addAction(grid, "DVD Eject", () -> service.ejectDvd(true));
 		addAction(grid, "DVD Close", () -> service.ejectDvd(false));
+		addAction(grid, "Screenshot to Clipboard", () -> ConsoleClipboard.copy(service.captureScreenshot()));
 		controls.add(grid);
 
-		JPanel lowerSections = new JPanel();
-		lowerSections.setLayout(new BoxLayout(lowerSections, BoxLayout.Y_AXIS));
-		lowerSections.add(discord);
-		lowerSections.add(controls);
-		panel.add(lowerSections, BorderLayout.SOUTH);
+		panel.add(controls, BorderLayout.SOUTH);
 		return panel;
+	}
+
+	private JCheckBox discordPresenceToggle()
+	{
+		JCheckBox toggle = new JCheckBox("Discord RPC");
+		toggle.setModel(discordPresence);
+		if (!discordRpc.configured())
+		{
+			toggle.setToolTipText("Discord Rich Presence is not configured in this build");
+		}
+		return toggle;
 	}
 
 	private void configureDiscordPresence()
@@ -336,11 +354,7 @@ public final class MainFrame extends JFrame
 		boolean configured = discordRpc.configured();
 		discordPresence.setEnabled(configured);
 		discordPresence.setSelected(configured && settings.discordRichPresence());
-		if (!configured)
-		{
-			discordPresence.setToolTipText("Discord Rich Presence is not configured in this build");
-		}
-		discordPresence.addActionListener(e ->
+		discordPresence.addItemListener(e ->
 		{
 			boolean enabled = discordPresence.isSelected();
 			settings.discordRichPresence(enabled);

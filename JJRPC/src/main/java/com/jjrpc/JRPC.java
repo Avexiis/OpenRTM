@@ -270,6 +270,47 @@ public final class JRPC
 			closeQuietly();
 		}
 
+		public synchronized ConsoleFrameCapture CaptureScreenshot() throws IOException
+		{
+			ensureConnected();
+			int previousTimeout = useSocketTimeout(Math.max(conversationTimeout, 120_000));
+			try
+			{
+				writeLine("screenshot");
+				String first = readAsciiLine();
+				int status = statusCode(first);
+				if (status != 200 && status != 203)
+				{
+					throw new ComException(UIntToInt(0x82DA0007L), "screenshot failed: " + first);
+				}
+				String metadata = first.length() > 4 ? first.substring(4).trim() : "";
+				if (status == 203 && !ConsoleFrameCapture.hasMetadata(metadata))
+				{
+					metadata = readAsciiLine();
+				}
+				if (!ConsoleFrameCapture.hasMetadata(metadata))
+				{
+					throw new ComException(UIntToInt(0x82DA0007L), "The console did not return screenshot data");
+				}
+				int length = ConsoleFrameCapture.payloadLength(metadata);
+				return new ConsoleFrameCapture(metadata, readN(length));
+			}
+			catch (IOException failure)
+			{
+				closeQuietly();
+				throw failure;
+			}
+			catch (RuntimeException failure)
+			{
+				closeQuietly();
+				throw failure;
+			}
+			finally
+			{
+				restoreSocketTimeout(previousTimeout);
+			}
+		}
+
 		public void Abort()
 		{
 			Socket activeSocket = sock;
