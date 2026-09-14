@@ -167,7 +167,10 @@ public final class FileBrowserPanel extends FileDropPanel
 				@Override
 				public void mouseClicked(MouseEvent event)
 				{
-					showRemoteTitleId(event);
+					if (!launchRemoteTitle(event))
+					{
+						showRemoteTitleId(event);
+					}
 				}
 			});
 		}
@@ -384,6 +387,28 @@ public final class FileBrowserPanel extends FileDropPanel
 
 		event.consume();
 		JOptionPane.showMessageDialog(this, entry.actualName(), "Actual folder name", JOptionPane.INFORMATION_MESSAGE);
+	}
+
+	private boolean launchRemoteTitle(MouseEvent event)
+	{
+		if (!SwingUtilities.isLeftMouseButton(event) || event.getClickCount() != 2)
+		{
+			return false;
+		}
+		TreePath path = remoteTree.getPathForLocation(event.getX(), event.getY());
+		if (path == null)
+		{
+			return false;
+		}
+		BrowserNode entry = browserNode(treeNode(path));
+		if (entry == null || !entry.remoteEntry() || entry.directory()
+			|| !entry.remotePath().toLowerCase(Locale.ROOT).endsWith(".xex"))
+		{
+			return false;
+		}
+		event.consume();
+		tasks.run("launch console title", () -> service.launchTitle(entry.remotePath()));
+		return true;
 	}
 
 	private void replaceChildren(DefaultTreeModel model, DefaultMutableTreeNode parent, BrowserNode parentEntry, List<DefaultMutableTreeNode> children)

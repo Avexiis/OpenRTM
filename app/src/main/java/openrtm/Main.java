@@ -2,6 +2,7 @@ package openrtm;
 
 import openrtm.config.AppSettings;
 import openrtm.console.ConsoleService;
+import openrtm.ui.ApplicationIcon;
 import openrtm.ui.MainFrame;
 import openrtm.ui.TextUndoSupport;
 import openrtm.ui.ThemeManager;
@@ -25,6 +26,7 @@ public final class Main
 
 		ThemeManager.initialize(new AppSettings());
 		TextUndoSupport.install();
+		ApplicationIcon.applyToTaskbar();
 		SwingUtilities.invokeLater(() -> new MainFrame().setVisible(true));
 	}
 

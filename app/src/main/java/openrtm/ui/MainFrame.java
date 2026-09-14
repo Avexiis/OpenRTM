@@ -102,6 +102,7 @@ public final class MainFrame extends JFrame
 	public MainFrame()
 	{
 		super("OpenRTM");
+		ApplicationIcon.apply(this);
 		setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 		setMinimumSize(new Dimension(1100, 720));
 		setSize(1250, 780);
@@ -229,7 +230,7 @@ public final class MainFrame extends JFrame
 		addPage(navigationModel, "Game Adder", new ProfileGameAdderPanel(profileWorkspace, this::runTask));
 		addPage(navigationModel, "Achievements", new AchievementUnlockerPanel(profileWorkspace, this::runTask));
 		fatxBrowserPanel = new FatxBrowserPanel(this::runTask, profileResolver);
-		addPage(navigationModel, "Xbox Storage", fatxBrowserPanel);
+		addPage(navigationModel, "FATX Device Explorer", fatxBrowserPanel);
 		addPage(navigationModel, "Package Manager", new PackageManagerPanel(this::runTask, profileResolver));
 		addPage(navigationModel, "ISO Extractor", new IsoToolPanel(this::runTask));
 		addPage(navigationModel, "Game Saves", new GameSaveEditorPanel(this::runTask, profileWorkspace));

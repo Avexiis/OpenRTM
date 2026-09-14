@@ -21,6 +21,7 @@ public final class VideoViewerWindow extends JFrame
 	public VideoViewerWindow(Window owner, Resolution resolution, boolean locked, Runnable closed)
 	{
 		super("Xbox 360 Capture");
+		ApplicationIcon.apply(this);
 		this.resolution = resolution;
 		this.locked = locked;
 		setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);

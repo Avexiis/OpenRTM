@@ -268,6 +268,28 @@ public final class ConsoleService
 		XboxFeatures.reboot(requireConsole(), XboxFeatures.XboxReboot.Cold);
 	}
 
+	public synchronized void launchTitle(String remotePath)
+	{
+		String normalized = remotePath == null ? "" : remotePath.trim().replace('/', '\\');
+		if (!normalized.toLowerCase(Locale.ROOT).endsWith(".xex"))
+		{
+			throw new IllegalArgumentException("Select an XEX file to launch");
+		}
+		int root = normalized.indexOf(":\\");
+		int separator = normalized.lastIndexOf('\\');
+		if (root < 1 || separator < root + 1 || separator == normalized.length() - 1)
+		{
+			throw new IllegalArgumentException("The XEX path is not a valid console path");
+		}
+		String directory = normalized.substring(0, separator);
+		if (directory.endsWith(":"))
+		{
+			directory += "\\";
+		}
+		String response = XboxFeatures.launchTitle(requireConsole(), normalized, directory);
+		throwIfXbdmError(response, "launch title");
+	}
+
 	public synchronized void shutdown()
 	{
 		rawCommand("shutdown");

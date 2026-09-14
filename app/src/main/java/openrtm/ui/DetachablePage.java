@@ -122,6 +122,7 @@ final class DetachablePage extends JPanel
 		private DetachedWindow(Frame owner)
 		{
 			super(title);
+			ApplicationIcon.apply(this);
 			setUndecorated(true);
 			setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 			setMinimumSize(new Dimension(760, 520));

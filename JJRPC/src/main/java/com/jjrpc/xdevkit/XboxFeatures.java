@@ -100,6 +100,21 @@ public final class XboxFeatures
 		}
 	}
 
+	public static String launchTitle(JRPC.IXboxConsole c, String imageName, String mediaDirectory)
+	{
+		if (imageName == null || imageName.isBlank())
+		{
+			throw new IllegalArgumentException("Title path is required");
+		}
+		if (mediaDirectory == null || mediaDirectory.isBlank())
+		{
+			throw new IllegalArgumentException("Title directory is required");
+		}
+		String command = "magicboot title=" + JRPC.XbdmXboxConsole.quoteXbdm(imageName)
+			+ " directory=" + JRPC.XbdmXboxConsole.quoteXbdm(mediaDirectory);
+		return sendRaw(c, command);
+	}
+
 	public static String getSystemInfo(JRPC.IXboxConsole c, SystemInfo info)
 	{
 		switch (info)
