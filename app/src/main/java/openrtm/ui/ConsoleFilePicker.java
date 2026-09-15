@@ -27,6 +27,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Predicate;
 
 public final class ConsoleFilePicker extends JDialog
 {
@@ -38,14 +39,30 @@ public final class ConsoleFilePicker extends JDialog
 	private final JList<FileEntry> fileList = new JList<>(listModel);
 	private final JTextField pathField;
 	private final JLabel statusLabel = new JLabel(" ");
+	private final Predicate<FileEntry> visibleEntry;
+	private final boolean filesOnly;
 
 	private String selectedPath;
 
 	public ConsoleFilePicker(JFrame parent, ConsoleService service, String initialPath)
 	{
-		super(parent, "Console File Browser", true);
+		this(parent, service, initialPath, "Console File Browser", entry -> true, false);
+	}
+
+	static ConsoleFilePicker xexFiles(JFrame parent, ConsoleService service, String initialPath)
+	{
+		return new ConsoleFilePicker(parent, service, initialPath, "Select Console Plugin",
+			entry -> entry.directory() || entry.name().toLowerCase(Locale.ROOT).endsWith(".xex"), true);
+	}
+
+	private ConsoleFilePicker(JFrame parent, ConsoleService service, String initialPath, String title,
+	                          Predicate<FileEntry> visibleEntry, boolean filesOnly)
+	{
+		super(parent, title, true);
 		this.service = service;
 		this.pathField = new JTextField(initialPath);
+		this.visibleEntry = visibleEntry;
+		this.filesOnly = filesOnly;
 
 		setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 		setSize(600, 450);
@@ -124,6 +141,13 @@ public final class ConsoleFilePicker extends JDialog
 					JOptionPane.WARNING_MESSAGE);
 				return;
 			}
+			if (filesOnly && entry.directory())
+			{
+				String newPath = childPath(pathField.getText(), entry.name());
+				pathField.setText(newPath);
+				loadDirectory(newPath);
+				return;
+			}
 			selectAndClose(entry);
 		});
 
@@ -141,15 +165,16 @@ public final class ConsoleFilePicker extends JDialog
 
 	private void goUp()
 	{
-		String path = pathField.getText().trim();
+		String path = normalizeDirectoryPath(pathField.getText());
+		int rootSlash = path.indexOf('\\');
 		int lastSlash = path.lastIndexOf('\\');
-		if (lastSlash > 2)
+		if (rootSlash >= 0 && lastSlash > rootSlash)
 		{
 			path = path.substring(0, lastSlash);
 		}
-		else if (lastSlash == 2)
+		else if (rootSlash >= 0)
 		{
-			path = path.substring(0, 3);
+			path = path.substring(0, rootSlash + 1);
 		}
 		pathField.setText(path);
 		loadDirectory(path);
@@ -157,7 +182,9 @@ public final class ConsoleFilePicker extends JDialog
 
 	private void loadDirectory(String path)
 	{
+		String directoryPath = normalizeDirectoryPath(path);
 		SwingUtilities.invokeLater(() -> {
+			pathField.setText(directoryPath);
 			statusLabel.setText("Loading...");
 			listModel.clear();
 		});
@@ -165,14 +192,15 @@ public final class ConsoleFilePicker extends JDialog
 		new Thread(() -> {
 			try
 			{
-				List<FileEntry> entries = service.listDirectory(path);
+				List<FileEntry> entries = service.listDirectory(directoryPath);
 				SwingUtilities.invokeLater(() -> {
 					listModel.clear();
-					for (FileEntry entry : entries)
+					List<FileEntry> visible = entries.stream().filter(visibleEntry).toList();
+					for (FileEntry entry : visible)
 					{
 						listModel.addElement(entry);
 					}
-					statusLabel.setText(entries.size() + " items");
+					statusLabel.setText(visible.size() + " items");
 				});
 			}
 			catch (Exception e)
@@ -198,6 +226,12 @@ public final class ConsoleFilePicker extends JDialog
 			return parent + name;
 		}
 		return parent + "\\" + name;
+	}
+
+	private static String normalizeDirectoryPath(String path)
+	{
+		String normalized = path == null ? "" : path.trim().replace('/', '\\');
+		return normalized.endsWith(":") ? normalized + "\\" : normalized;
 	}
 
 	public String getSelectedPath()

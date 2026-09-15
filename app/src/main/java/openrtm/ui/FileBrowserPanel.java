@@ -6,6 +6,7 @@ import openrtm.stfs.PackageService;
 import openrtm.titleids.TitleIds;
 
 import javax.swing.BorderFactory;
+import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -871,6 +872,7 @@ public final class FileBrowserPanel extends FileDropPanel
 	private static final class BrowserTreeCellRenderer extends JPanel implements TreeCellRenderer
 	{
 		private static final int ID_BUTTON_WIDTH = 34;
+		private static final Icon XEX_ICON = XexFileIcon.load(16);
 		private final DefaultTreeCellRenderer label = new DefaultTreeCellRenderer();
 		private final JButton idButton = new JButton("ID");
 		private String actualName;
@@ -902,7 +904,8 @@ public final class FileBrowserPanel extends FileDropPanel
 				}
 				else
 				{
-					label.setIcon(UIManager.getIcon("FileView.fileIcon"));
+					label.setIcon(entry.name().toLowerCase(Locale.ROOT).endsWith(".xex")
+						? XEX_ICON : UIManager.getIcon("FileView.fileIcon"));
 				}
 			}
 
@@ -1009,6 +1012,11 @@ public final class FileBrowserPanel extends FileDropPanel
 		boolean directory()
 		{
 			return directory;
+		}
+
+		String name()
+		{
+			return name;
 		}
 
 		boolean loaded()

@@ -4,6 +4,7 @@ import openrtm.console.ConsoleService;
 import openrtm.dashlaunch.DashlaunchPluginService;
 
 import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
@@ -12,17 +13,21 @@ import javax.swing.JScrollPane;
 import javax.swing.JTable;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 final class DashlaunchPluginPanel extends JPanel
 {
+	private static final String COMPUTER_PLUGIN_DIRECTORY = "Hdd:\\OpenRTM\\Plugins";
 	private final JFrame parent;
 	private final ConsoleService console;
 	private final TaskRunner taskRunner;
@@ -70,14 +75,17 @@ final class DashlaunchPluginPanel extends JPanel
 		JPanel panel = new JPanel(new BorderLayout());
 		JPanel commands = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
 		JButton load = new JButton("Load Plugins");
-		JButton browse = new JButton("Browse Console");
+		JButton browseConsole = new JButton("Browse Console");
+		JButton browseComputer = new JButton("Browse PC");
 		JButton clear = new JButton("Clear Slot");
 		load.addActionListener(event -> load());
-		browse.addActionListener(event -> browse());
+		browseConsole.addActionListener(event -> browseConsole());
+		browseComputer.addActionListener(event -> browseComputer());
 		clear.addActionListener(event -> clear());
 		save.addActionListener(event -> save());
 		commands.add(load);
-		commands.add(browse);
+		commands.add(browseConsole);
+		commands.add(browseComputer);
 		commands.add(clear);
 		commands.add(save);
 		panel.add(commands, BorderLayout.WEST);
@@ -116,7 +124,7 @@ final class DashlaunchPluginPanel extends JPanel
 		});
 	}
 
-	private void browse()
+	private void browseConsole()
 	{
 		int row = table.getSelectedRow();
 		if (row < 0)
@@ -124,7 +132,7 @@ final class DashlaunchPluginPanel extends JPanel
 			return;
 		}
 		String value = String.valueOf(model.getValueAt(row, 1));
-		ConsoleFilePicker picker = new ConsoleFilePicker(parent, console, parentPath(value));
+		ConsoleFilePicker picker = ConsoleFilePicker.xexFiles(parent, console, parentPath(value));
 		picker.setVisible(true);
 		String selected = picker.getSelectedPath();
 		if (selected == null)
@@ -138,6 +146,40 @@ final class DashlaunchPluginPanel extends JPanel
 			return;
 		}
 		model.setValueAt(selected, row, 1);
+	}
+
+	private void browseComputer()
+	{
+		int row = table.getSelectedRow();
+		if (row < 0)
+		{
+			return;
+		}
+		JFileChooser chooser = new JFileChooser();
+		chooser.setDialogTitle("Select Dashlaunch Plugin");
+		chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+		chooser.setAcceptAllFileFilterUsed(false);
+		chooser.setFileFilter(new FileNameExtensionFilter("Xbox 360 plugins (*.xex)", "xex"));
+		if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION)
+		{
+			return;
+		}
+		Path selected = chooser.getSelectedFile().toPath().toAbsolutePath().normalize();
+		if (!Files.isRegularFile(selected) || !selected.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".xex"))
+		{
+			JOptionPane.showMessageDialog(this, "Select an XEX plugin file", "Dashlaunch Plugins",
+				JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+		String remotePath = COMPUTER_PLUGIN_DIRECTORY + "\\" + consoleFileName(selected);
+		taskRunner.run("upload Dashlaunch plugin", () -> {
+			console.ensureDirectory(COMPUTER_PLUGIN_DIRECTORY);
+			console.uploadFile(selected, remotePath);
+			SwingUtilities.invokeLater(() -> {
+				model.setValueAt(remotePath, row, 1);
+				state.setText("Uploaded " + selected.getFileName());
+			});
+		});
 	}
 
 	private void clear()
@@ -168,7 +210,22 @@ final class DashlaunchPluginPanel extends JPanel
 			return "Hdd:\\";
 		}
 		String normalized = value.replace('/', '\\');
+		int rootSeparator = normalized.indexOf('\\');
 		int separator = normalized.lastIndexOf('\\');
-		return separator < 3 ? "Hdd:\\" : normalized.substring(0, separator);
+		if (rootSeparator >= 0 && separator == rootSeparator)
+		{
+			return normalized.substring(0, rootSeparator + 1);
+		}
+		if (separator > rootSeparator)
+		{
+			return normalized.substring(0, separator);
+		}
+		int colon = normalized.indexOf(':');
+		return colon > 0 ? normalized.substring(0, colon + 1) + "\\" : "Hdd:\\";
+	}
+
+	private static String consoleFileName(Path path)
+	{
+		return path.getFileName().toString().replaceAll("[\\\\/:*?\"<>|]", "_");
 	}
 }
