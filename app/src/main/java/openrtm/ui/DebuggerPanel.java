@@ -70,11 +70,12 @@ public final class DebuggerPanel extends JPanel
 	private final DefaultListModel<Breakpoint> breakpointModel = new DefaultListModel<>();
 	private final DefaultTableModel eventModel = tableModel("Time", "Type", "Thread", "Address", "Details");
 	private final DefaultTableModel threadModel = tableModel(
-		"Thread", "State", "Priority", "Suspend", "Start", "Stack Base", "Stack Limit", "CPU");
-	private final DefaultTableModel registerModel = tableModel("Register", "Value");
+		"Thread", "State", "Stop Reason", "Priority", "Suspend", "Start", "Stack Base", "Stack Limit", "CPU");
+	private final DefaultTableModel registerModel = editableRegisterModel();
 	private final DefaultTableModel moduleModel = tableModel("Name", "Base", "Size", "Checksum", "Type");
 	private final JTable eventTable = new JTable(eventModel);
 	private final JTable threadTable = new JTable(threadModel);
+	private final JTable registerTable = new JTable(registerModel);
 	private final JLabel sessionStatus = new JLabel("Detached");
 	private final JLabel executionStatus = new JLabel("Execution: Unknown");
 	private final JButton attachButton = new JButton("Attach");
@@ -82,8 +83,10 @@ public final class DebuggerPanel extends JPanel
 	private final JButton pauseButton = attachedButton("Pause");
 	private final JButton continueButton = attachedButton("Continue");
 	private final JButton refreshButton = attachedButton("Refresh");
+	private final JButton writeContextButton = attachedButton("Write Context");
 	private final JCheckBox overrideExisting = new JCheckBox("Override existing debugger");
 	private List<ThreadInfo> threadRows = List.of();
+	private Long contextThreadId;
 
 	public DebuggerPanel(DebuggerService debugger, TaskRunner tasks)
 	{
@@ -231,9 +234,8 @@ public final class DebuggerPanel extends JPanel
 	private JPanel threadPanel()
 	{
 		JPanel panel = new JPanel(new BorderLayout(8, 8));
-		JTable registers = new JTable(registerModel);
 		JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
-			new JScrollPane(threadTable), new JScrollPane(registers));
+			new JScrollPane(threadTable), new JScrollPane(registerTable));
 		split.setResizeWeight(0.72);
 		split.setDividerLocation(720);
 
@@ -245,10 +247,9 @@ public final class DebuggerPanel extends JPanel
 		JButton suspend = attachedButton("Suspend");
 		JButton resume = attachedButton("Resume");
 		refresh.addActionListener(e -> refreshThreads());
-		context.addActionListener(e -> withSelectedThread("read thread context", id -> {
-			List<RegisterValue> values = debugger.threadContext(id);
-			SwingUtilities.invokeLater(() -> showRegisters(values));
-		}));
+		context.addActionListener(e -> readSelectedContext());
+		writeContextButton.setToolTipText("Write edited registers to the selected stopped thread");
+		writeContextButton.addActionListener(e -> writeSelectedContext());
 		halt.addActionListener(e -> threadCommand("halt thread", debugger::haltThread));
 		proceed.addActionListener(e -> threadCommand("continue thread", id -> debugger.continueThread(id, false)));
 		passException.addActionListener(e -> threadCommand("continue thread exception", id -> debugger.continueThread(id, true)));
@@ -258,6 +259,7 @@ public final class DebuggerPanel extends JPanel
 		JPanel tools = row();
 		tools.add(refresh);
 		tools.add(context);
+		tools.add(writeContextButton);
 		tools.add(halt);
 		tools.add(proceed);
 		tools.add(passException);
@@ -292,6 +294,9 @@ public final class DebuggerPanel extends JPanel
 		threadTable.setFillsViewportHeight(true);
 		threadTable.setAutoCreateRowSorter(true);
 		threadTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+		threadTable.getSelectionModel().addListSelectionListener(e -> updateContextEditing());
+		registerTable.setFillsViewportHeight(true);
+		registerTable.putClientProperty("terminateEditOnFocusLost", Boolean.TRUE);
 	}
 
 	private void attach()
@@ -379,18 +384,93 @@ public final class DebuggerPanel extends JPanel
 		for (ThreadInfo thread : values)
 		{
 			threadModel.addRow(new Object[]{hex(thread.id()), thread.stopped() ? "Stopped" : "Running",
-				thread.priority(), thread.suspendCount(), hex(thread.startAddress()), hex(thread.stackBase()),
+				thread.stopReason() == null ? "" : thread.stopReason(), thread.priority(), thread.suspendCount(),
+				hex(thread.startAddress()), hex(thread.stackBase()),
 				hex(thread.stackLimit()), thread.processor()});
 		}
+		updateContextEditing();
 	}
 
-	private void showRegisters(List<RegisterValue> values)
+	private void showRegisters(long threadId, List<RegisterValue> values)
 	{
+		contextThreadId = threadId;
 		registerModel.setRowCount(0);
 		for (RegisterValue value : values)
 		{
 			registerModel.addRow(new Object[]{value.name(), value.value()});
 		}
+		updateContextEditing();
+	}
+
+	private void readSelectedContext()
+	{
+		ThreadInfo thread = selectedThread();
+		if (thread == null)
+		{
+			tasks.run("read thread context", () -> {
+				throw new IllegalArgumentException("Select a thread");
+			});
+			return;
+		}
+		tasks.run("read thread context", () -> {
+			List<RegisterValue> values = debugger.threadContext(thread.id());
+			SwingUtilities.invokeLater(() -> showRegisters(thread.id(), values));
+		});
+	}
+
+	private void writeSelectedContext()
+	{
+		if (registerTable.isEditing() && !registerTable.getCellEditor().stopCellEditing())
+		{
+			return;
+		}
+		ThreadInfo thread = selectedThread();
+		if (thread == null || contextThreadId == null || thread.id() != contextThreadId)
+		{
+			tasks.run("write thread context", () -> {
+				throw new IllegalArgumentException("Read the selected thread context before editing it");
+			});
+			return;
+		}
+		if (!thread.stopped())
+		{
+			tasks.run("write thread context", () -> {
+				throw new IllegalStateException("Stop the selected thread before writing its context");
+			});
+			return;
+		}
+		List<RegisterValue> values = new ArrayList<>();
+		for (int row = 0; row < registerModel.getRowCount(); row++)
+		{
+			values.add(new RegisterValue(String.valueOf(registerModel.getValueAt(row, 0)),
+				String.valueOf(registerModel.getValueAt(row, 1))));
+		}
+		long threadId = thread.id();
+		tasks.run("write thread context", () -> {
+			debugger.writeThreadContext(threadId, values);
+			List<RegisterValue> refreshed = debugger.threadContext(threadId);
+			SwingUtilities.invokeLater(() -> showRegisters(threadId, refreshed));
+		});
+	}
+
+	private void updateContextEditing()
+	{
+		ThreadInfo selected = selectedThread();
+		boolean editable = debugger.attached() && selected != null && selected.stopped()
+			&& contextThreadId != null && selected.id() == contextThreadId && registerModel.getRowCount() > 0;
+		writeContextButton.setEnabled(editable);
+		registerTable.setEnabled(editable);
+	}
+
+	private ThreadInfo selectedThread()
+	{
+		int viewRow = threadTable.getSelectedRow();
+		if (viewRow < 0)
+		{
+			return null;
+		}
+		int modelRow = threadTable.convertRowIndexToModel(viewRow);
+		return modelRow >= 0 && modelRow < threadRows.size() ? threadRows.get(modelRow) : null;
 	}
 
 	private void refreshModules()
@@ -431,17 +511,15 @@ public final class DebuggerPanel extends JPanel
 
 	private void withSelectedThread(String label, ThreadCommand command)
 	{
-		int viewRow = threadTable.getSelectedRow();
-		if (viewRow < 0)
+		ThreadInfo thread = selectedThread();
+		if (thread == null)
 		{
 			tasks.run(label, () -> {
 				throw new IllegalArgumentException("Select a thread");
 			});
 			return;
 		}
-		int modelRow = threadTable.convertRowIndexToModel(viewRow);
-		long threadId = threadRows.get(modelRow).id();
-		tasks.run(label, () -> command.run(threadId));
+		tasks.run(label, () -> command.run(thread.id()));
 	}
 
 	private void applyStopConditions()
@@ -597,7 +675,10 @@ public final class DebuggerPanel extends JPanel
 		if (!attached)
 		{
 			executionStatus.setText("Execution: Unknown");
+			contextThreadId = null;
+			registerModel.setRowCount(0);
 		}
+		updateContextEditing();
 	}
 
 	private static JPanel row()
@@ -629,6 +710,18 @@ public final class DebuggerPanel extends JPanel
 			public boolean isCellEditable(int row, int column)
 			{
 				return false;
+			}
+		};
+	}
+
+	private static DefaultTableModel editableRegisterModel()
+	{
+		return new DefaultTableModel(new Object[]{"Register", "Value"}, 0)
+		{
+			@Override
+			public boolean isCellEditable(int row, int column)
+			{
+				return column == 1;
 			}
 		};
 	}

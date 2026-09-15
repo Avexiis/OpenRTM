@@ -39,7 +39,7 @@ https://github.com/Avexiis/OpenRTM-Launcher
 
 ## Connection
 
-Enter the console address in the top row and click **Connect**. A successful connection displays `OpenRTM Connected!` on the Xbox 360 and loads console information and storage drives.
+Click **Scan for consoles** to find compatible consoles on the local network, select one of the results, and then click **Connect**. You can also enter a console address manually. A successful connection displays `OpenRTM Connected!` on the Xbox 360 and loads console information and storage drives.
 
 OpenRTM remembers recently used addresses. **Autoconnect** connects to the last selected console when the application starts. While a connection is active, OpenRTM periodically checks it and attempts to reconnect after a network interruption. Use **Disconnect** to stop reconnecting deliberately.
 
@@ -83,6 +83,7 @@ The console controls can:
 * Perform a warm or cold reboot
 * Shut down the console
 * Open or close the disc tray
+* Capture the console screen as a PNG and place it on the clipboard
 
 Save any open work before using the reboot or shutdown controls.
 
@@ -133,11 +134,14 @@ The debugger can:
 * Display debug strings, exceptions, execution changes, loaded modules, and thread events
 * Stop on selected event types
 * Add and remove software and hardware breakpoints
-* List threads, change their state, and read registers
+* List threads, inspect their stop reason, change their state, and read registers
+* Edit integer and control registers on a stopped thread
 * List modules used by the current title
 * Save displayed output to a text log
 
 Enable **Override existing debugger** only when the console reports that another debugger is attached and you intend to replace it. Remove breakpoints and detach normally before leaving a title when possible.
+
+To edit a context, select a stopped thread and click **Read Context**. Change values in the register table and click **Write Context**. OpenRTM checks that the same thread is still stopped before sending the changes.
 
 Debugger controls can interrupt a title at sensitive points. If the console stops responding, avoid sending repeated commands and reconnect only after it becomes available again.
 
@@ -145,27 +149,31 @@ Debugger controls can interrupt a title at sensitive points. If the console stop
 
 File Transfer shows the computer on the left and console storage on the right. Expand a folder to load its contents.
 
+The storage bar above the browsers shows total and free space for `Hdd:\`. Hover over it to see the used and total values.
+
 ### Uploading
 
 1. Select a file or folder on the left.
 2. Select the destination folder on the right.
-3. Click **Upload ->**.
+3. Click **Upload**.
 
 You can instead drag one or more desktop files or folders onto the page. Dropped items are uploaded into the selected console folder. If a file is selected on the console side, its parent folder is used as the destination.
 
 Uploading a folder creates that folder inside the selected destination and preserves its subfolders. For example, uploading a local folder named `MW2` to `Hdd:\Games` creates `Hdd:\Games\MW2`.
 
-Uploads inspect data already present on the console. Matching data is kept, incomplete data is continued when supported, and mismatched data is repaired or replaced. If the connection drops, OpenRTM waits, reconnects, and continues. Use **Cancel Transfer** to stop the current operation.
+Uploads inspect data already present on the console. Matching data is kept, incomplete data is continued when supported, and mismatched data is repaired or replaced. If the connection drops, OpenRTM waits, reconnects, and continues. Use **Cancel** to stop the current operation.
 
 ### Downloading
 
 1. Select a file or folder on the right.
 2. Select the destination folder on the left.
-3. Click **<- Download**.
+3. Click **Download**.
 
 Downloaded folders keep their files and subfolders. OpenRTM asks before replacing an existing local destination.
 
-Use the refresh buttons when either side changes outside OpenRTM. You can also create console folders and delete the selected console item. Deletion cannot be undone.
+Use the refresh buttons when either side changes outside OpenRTM. **New Folder**, **Rename**, **Properties**, and **Delete** apply to the PC or Xbox side selected most recently. Renaming and deleting always require confirmation, and deletion cannot be undone.
+
+**Properties** displays the selected item's type, size, timestamps, and attributes. Read-only and hidden attributes can be changed when supported by the selected storage.
 
 ### Friendly folder names
 

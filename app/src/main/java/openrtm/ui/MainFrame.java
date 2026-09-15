@@ -3,6 +3,8 @@ package openrtm.ui;
 import com.jjrpc.JRPC;
 import openrtm.config.AppSettings;
 import openrtm.config.ProfileIdentityStore;
+import openrtm.console.ConsoleDiscovery;
+import openrtm.console.ConsoleDiscovery.DiscoveredConsole;
 import openrtm.console.ConsoleService;
 import openrtm.discord.DiscordRpcService;
 import openrtm.profile.ProfileIdentityResolver;
@@ -60,6 +62,7 @@ public final class MainFrame extends JFrame
 	private static final Color DANGER = new Color(192, 85, 85);
 
 	private final ConsoleService service = new ConsoleService();
+	private final ConsoleDiscovery consoleDiscovery = new ConsoleDiscovery();
 	private final AppSettings settings = new AppSettings();
 	private final DiscordRpcService discordRpc = new DiscordRpcService(service);
 	private final ProfileIdentityStore profileIdentities = new ProfileIdentityStore();
@@ -164,9 +167,11 @@ public final class MainFrame extends JFrame
 		JPanel panel = new JPanel(new BorderLayout());
 		panel.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, LINE));
 		JPanel connection = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
+		JButton scan = button("Scan for consoles");
 		JButton connect = button("Connect");
 		JButton disconnect = button("Disconnect");
 		JButton refresh = button("Refresh Info");
+		scan.addActionListener(e -> scanForConsoles(scan));
 		connect.addActionListener(e -> connect());
 		disconnect.addActionListener(e -> runTask("disconnect", () -> {
 			stopReconnect();
@@ -178,6 +183,7 @@ public final class MainFrame extends JFrame
 		refresh.addActionListener(e -> refreshInfo());
 		connection.add(new JLabel("Console IP"));
 		connection.add(hostField);
+		connection.add(scan);
 		connection.add(connect);
 		connection.add(disconnect);
 		connection.add(refresh);
@@ -474,6 +480,61 @@ public final class MainFrame extends JFrame
 		});
 	}
 
+	private void scanForConsoles(JButton scanButton)
+	{
+		scanButton.setEnabled(false);
+		setStatus("Scanning the local network...", WARN);
+		executor.submit(() -> {
+			try
+			{
+				List<DiscoveredConsole> consoles = consoleDiscovery.scan();
+				SwingUtilities.invokeLater(() -> showDiscoveredConsoles(consoles));
+			}
+			catch (RuntimeException failure)
+			{
+				SwingUtilities.invokeLater(() -> {
+					setStatus("Console scan failed", DANGER);
+					JOptionPane.showMessageDialog(this, failure.getMessage(), "Scan for consoles",
+						JOptionPane.ERROR_MESSAGE);
+				});
+			}
+			finally
+			{
+				SwingUtilities.invokeLater(() -> scanButton.setEnabled(true));
+			}
+		});
+	}
+
+	private void showDiscoveredConsoles(List<DiscoveredConsole> consoles)
+	{
+		for (DiscoveredConsole console : consoles)
+		{
+			addHostChoice(console.address());
+		}
+		if (consoles.isEmpty())
+		{
+			setStatus("No consoles found", WARN);
+			JOptionPane.showMessageDialog(this, "No consoles responded on the local network.",
+				"Scan for consoles", JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		DiscoveredConsole selected;
+		if (consoles.size() == 1)
+		{
+			selected = consoles.get(0);
+		}
+		else
+		{
+			selected = (DiscoveredConsole) JOptionPane.showInputDialog(this, "Select a console", "Consoles Found",
+				JOptionPane.PLAIN_MESSAGE, null, consoles.toArray(), consoles.get(0));
+		}
+		if (selected != null)
+		{
+			hostField.setSelectedItem(selected.address());
+		}
+		setStatus("Found " + consoles.size() + (consoles.size() == 1 ? " console" : " consoles"), OK);
+	}
+
 	private void connected(String host, boolean refresh)
 	{
 		rememberHostInCombo(host);
@@ -704,5 +765,17 @@ public final class MainFrame extends JFrame
 		}
 		hostField.insertItemAt(host, 0);
 		hostField.setSelectedIndex(0);
+	}
+
+	private void addHostChoice(String host)
+	{
+		for (int i = 0; i < hostField.getItemCount(); i++)
+		{
+			if (hostField.getItemAt(i).equalsIgnoreCase(host))
+			{
+				return;
+			}
+		}
+		hostField.addItem(host);
 	}
 }

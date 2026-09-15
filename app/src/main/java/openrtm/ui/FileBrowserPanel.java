@@ -8,6 +8,7 @@ import openrtm.titleids.TitleIds;
 import javax.swing.BorderFactory;
 import javax.swing.Icon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -15,6 +16,7 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTree;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.ToolTipManager;
 import javax.swing.UIManager;
@@ -32,6 +34,8 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
@@ -41,6 +45,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.DosFileAttributeView;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -60,6 +69,8 @@ public final class FileBrowserPanel extends FileDropPanel
 	private static final Pattern CONTENT_ROOT_PATH = Pattern.compile("(?i)^Hdd:\\\\Content\\\\?$");
 	private static final Pattern CONTENT_TITLE_PATH = Pattern.compile(
 		"(?i)^Hdd:\\\\Content\\\\[0-9A-F]{16}\\\\[0-9A-F]{8}\\\\?$");
+	private static final DateTimeFormatter PROPERTY_TIME = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm:ss a")
+		.withZone(ZoneId.systemDefault());
 
 	private final ConsoleService service;
 	private final TaskRunner tasks;
@@ -74,8 +85,10 @@ public final class FileBrowserPanel extends FileDropPanel
 	private final JLabel remotePath = new JLabel(" ");
 	private final JProgressBar transferProgress = new JProgressBar(0, 100);
 	private final JLabel transferStatus = new JLabel(" ");
-	private final JButton cancelTransfer = button("Cancel Transfer");
+	private final JButton cancelTransfer = button("Cancel");
+	private final JProgressBar storageMeter = new JProgressBar(0, 1000);
 	private boolean transferActive;
+	private BrowserSide activeSide = BrowserSide.LOCAL;
 
 	public FileBrowserPanel(ConsoleService service, TaskRunner tasks, ProfileIdentityResolver identities)
 	{
@@ -108,26 +121,33 @@ public final class FileBrowserPanel extends FileDropPanel
 		JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
 
 		JButton refreshLocal = button("Refresh PC");
-		JButton refreshRemote = button("Refresh Console");
-		JButton upload = button("Upload ->");
-		JButton download = button("<- Download");
+		JButton refreshRemote = button("Refresh Xbox");
+		JButton upload = button("Upload");
+		JButton download = button("Download");
 		JButton newFolder = button("New Folder");
-		JButton delete = button("Delete Remote");
+		JButton rename = button("Rename");
+		JButton properties = button("Properties");
+		JButton delete = button("Delete");
 
 		refreshLocal.addActionListener(e -> refreshSelectedLocal());
 		refreshRemote.addActionListener(e -> refreshSelectedRemote());
 		upload.addActionListener(e -> uploadSelected());
 		download.addActionListener(e -> downloadSelected());
-		newFolder.addActionListener(e -> createRemoteFolder());
-		delete.addActionListener(e -> deleteSelectedRemote());
+		newFolder.addActionListener(e -> createFolder());
+		rename.addActionListener(e -> renameSelected());
+		properties.addActionListener(e -> showSelectedProperties());
+		delete.addActionListener(e -> deleteSelected());
 		cancelTransfer.addActionListener(e -> service.cancelFileTransfer());
+		cancelTransfer.setToolTipText("Cancel the current file transfer");
 		cancelTransfer.setEnabled(false);
 
 		actions.add(refreshLocal);
-		actions.add(refreshRemote);
 		actions.add(upload);
 		actions.add(download);
+		actions.add(refreshRemote);
 		actions.add(newFolder);
+		actions.add(rename);
+		actions.add(properties);
 		actions.add(delete);
 		actions.add(cancelTransfer);
 
@@ -137,8 +157,15 @@ public final class FileBrowserPanel extends FileDropPanel
 		progress.add(fileDropHint("Drag and drop PC files or folders to upload"), BorderLayout.WEST);
 		progress.add(transferStatus, BorderLayout.CENTER);
 		progress.add(transferProgress, BorderLayout.EAST);
+		JPanel storage = new JPanel(new BorderLayout(8, 0));
+		storage.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
+		storage.add(new JLabel("HDD:\\"), BorderLayout.WEST);
+		storageMeter.setStringPainted(true);
+		storageMeter.setString("Storage usage loads with console drives");
+		storage.add(storageMeter, BorderLayout.CENTER);
 
 		panel.add(actions, BorderLayout.NORTH);
+		panel.add(storage, BorderLayout.CENTER);
 		panel.add(progress, BorderLayout.SOUTH);
 		return panel;
 	}
@@ -279,6 +306,7 @@ public final class FileBrowserPanel extends FileDropPanel
 			{
 				children.add(newNode(BrowserNode.remote(drive, drive, true, 0)));
 			}
+			ConsoleService.DriveSpace space = hddSpace(drives);
 			SwingUtilities.invokeLater(() -> {
 				remoteRoot.removeAllChildren();
 				if (children.isEmpty())
@@ -290,8 +318,42 @@ public final class FileBrowserPanel extends FileDropPanel
 					children.forEach(remoteRoot::add);
 				}
 				remoteModel.reload();
+				showStorageMeter(space);
 			});
 		});
+	}
+
+	private ConsoleService.DriveSpace hddSpace(List<String> drives)
+	{
+		boolean available = drives.stream().anyMatch(drive -> drive.equalsIgnoreCase("Hdd:\\"));
+		if (!available)
+		{
+			return new ConsoleService.DriveSpace("Hdd:\\", -1, -1, -1);
+		}
+		try
+		{
+			return service.driveSpace("Hdd:\\");
+		}
+		catch (RuntimeException ignored)
+		{
+			return new ConsoleService.DriveSpace("Hdd:\\", -1, -1, -1);
+		}
+	}
+
+	private void showStorageMeter(ConsoleService.DriveSpace space)
+	{
+		if (space.totalBytes() <= 0 || space.totalFreeBytes() < 0)
+		{
+			storageMeter.setValue(0);
+			storageMeter.setString("Unavailable");
+			storageMeter.setToolTipText(null);
+			return;
+		}
+		long used = Math.max(0, space.totalBytes() - space.totalFreeBytes());
+		storageMeter.setValue((int) Math.min(1000, used * 1000.0 / space.totalBytes()));
+		storageMeter.setString(formatSize(space.totalBytes()) + " total, "
+			+ formatSize(space.totalFreeBytes()) + " free");
+		storageMeter.setToolTipText(formatSize(used) + " used of " + formatSize(space.totalBytes()));
 	}
 
 	private void loadLocalNode(DefaultMutableTreeNode node)
@@ -599,6 +661,208 @@ public final class FileBrowserPanel extends FileDropPanel
 		transferStatus.setText(" ");
 	}
 
+	private void createFolder()
+	{
+		if (activeSide == BrowserSide.LOCAL)
+		{
+			createLocalFolder();
+		}
+		else
+		{
+			createRemoteFolder();
+		}
+	}
+
+	private void renameSelected()
+	{
+		if (activeSide == BrowserSide.LOCAL)
+		{
+			renameSelectedLocal();
+		}
+		else
+		{
+			renameSelectedRemote();
+		}
+	}
+
+	private void showSelectedProperties()
+	{
+		if (activeSide == BrowserSide.LOCAL)
+		{
+			showSelectedLocalProperties();
+		}
+		else
+		{
+			showSelectedRemoteProperties();
+		}
+	}
+
+	private void deleteSelected()
+	{
+		if (activeSide == BrowserSide.LOCAL)
+		{
+			deleteSelectedLocal();
+		}
+		else
+		{
+			deleteSelectedRemote();
+		}
+	}
+
+	private void createLocalFolder()
+	{
+		DefaultMutableTreeNode directoryNode = selectedLocalDirectoryNode();
+		BrowserNode directory = browserNode(directoryNode);
+		if (directory == null)
+		{
+			showSelectionError("Select a PC folder");
+			return;
+		}
+		String value = JOptionPane.showInputDialog(this, "Folder name", "");
+		if (value == null)
+		{
+			return;
+		}
+		String name = value.trim();
+		if (name.isBlank() || name.equals(".") || name.equals("..") || invalidLocalName(name))
+		{
+			showSelectionError("Folder name cannot be blank or contain path separators");
+			return;
+		}
+		Path destination = directory.localPath().resolve(name);
+		tasks.run("create PC folder", () -> {
+			Files.createDirectory(destination);
+			List<DefaultMutableTreeNode> children = localChildren(directory.localPath());
+			SwingUtilities.invokeLater(() -> replaceChildren(localModel, directoryNode, directory, children));
+		});
+	}
+
+	private void renameSelectedLocal()
+	{
+		DefaultMutableTreeNode node = selectedNode(localTree);
+		BrowserNode entry = browserNode(node);
+		DefaultMutableTreeNode parent = parentNode(node);
+		BrowserNode parentEntry = browserNode(parent);
+		if (entry == null || !entry.localEntry() || parent == localRoot || parentEntry == null)
+		{
+			showSelectionError("Select a PC file or folder inside a listed location");
+			return;
+		}
+		String currentName = fileName(entry.localPath());
+		String value = JOptionPane.showInputDialog(this, "New name", currentName);
+		if (value == null)
+		{
+			return;
+		}
+		String name = value.trim();
+		if (name.isBlank() || name.equals(".") || name.equals("..") || invalidLocalName(name))
+		{
+			showSelectionError("Name cannot be blank or contain path separators");
+			return;
+		}
+		if (name.equals(currentName))
+		{
+			return;
+		}
+		Path destination = entry.localPath().resolveSibling(name);
+		if (!confirmRename(entry.localPath().toString(), destination.toString()))
+		{
+			return;
+		}
+		tasks.run("rename PC item", () -> {
+			Files.move(entry.localPath(), destination);
+			List<DefaultMutableTreeNode> children = localChildren(parentEntry.localPath());
+			SwingUtilities.invokeLater(() -> replaceChildren(localModel, parent, parentEntry, children));
+		});
+	}
+
+	private void showSelectedLocalProperties()
+	{
+		DefaultMutableTreeNode node = selectedNode(localTree);
+		BrowserNode entry = browserNode(node);
+		if (entry == null || !entry.localEntry())
+		{
+			showSelectionError("Select a PC file or folder");
+			return;
+		}
+		tasks.run("load PC properties", () -> {
+			BasicFileAttributes attributes = Files.readAttributes(
+				entry.localPath(), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+			LocalProperties properties = new LocalProperties(attributes.size(), attributes.creationTime().toInstant(),
+				attributes.lastModifiedTime().toInstant(), attributes.isDirectory(), !Files.isWritable(entry.localPath()),
+				Files.isHidden(entry.localPath()));
+			SwingUtilities.invokeLater(() -> editLocalProperties(node, entry, properties));
+		});
+	}
+
+	private void editLocalProperties(DefaultMutableTreeNode node, BrowserNode entry, LocalProperties properties)
+	{
+		JPanel fields = new JPanel(new GridBagLayout());
+		GridBagConstraints constraints = propertyConstraints();
+		addPropertyRow(fields, constraints, 0, "Path", entry.localPath().toString());
+		addPropertyRow(fields, constraints, 1, "Type", properties.directory() ? "Folder" : "File");
+		addPropertyRow(fields, constraints, 2, "Size", properties.directory() ? "-" : formatSize(properties.size()));
+		addPropertyRow(fields, constraints, 3, "Created", formatPropertyTime(properties.created()));
+		addPropertyRow(fields, constraints, 4, "Modified", formatPropertyTime(properties.changed()));
+		JCheckBox readOnly = new JCheckBox("Read-only", properties.readOnly());
+		JCheckBox hidden = new JCheckBox("Hidden", properties.hidden());
+		DosFileAttributeView dos = Files.getFileAttributeView(
+			entry.localPath(), DosFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+		hidden.setEnabled(dos != null);
+		constraints.gridx = 0;
+		constraints.gridy = 5;
+		constraints.gridwidth = 2;
+		fields.add(readOnly, constraints);
+		constraints.gridy = 6;
+		fields.add(hidden, constraints);
+		if (JOptionPane.showConfirmDialog(this, fields, "PC Properties",
+			JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION)
+		{
+			return;
+		}
+		tasks.run("save PC properties", () -> {
+			if (readOnly.isSelected() != properties.readOnly()
+				&& !entry.localPath().toFile().setWritable(!readOnly.isSelected()))
+			{
+				throw new IOException("The read-only setting could not be changed");
+			}
+			if (dos != null && hidden.isSelected() != properties.hidden())
+			{
+				dos.setHidden(hidden.isSelected());
+			}
+			DefaultMutableTreeNode parent = parentNode(node);
+			BrowserNode parentEntry = browserNode(parent);
+			if (parent != null && parentEntry != null && parentEntry.localEntry())
+			{
+				List<DefaultMutableTreeNode> children = localChildren(parentEntry.localPath());
+				SwingUtilities.invokeLater(() -> replaceChildren(localModel, parent, parentEntry, children));
+			}
+		});
+	}
+
+	private void deleteSelectedLocal()
+	{
+		DefaultMutableTreeNode node = selectedNode(localTree);
+		BrowserNode entry = browserNode(node);
+		DefaultMutableTreeNode parent = parentNode(node);
+		BrowserNode parentEntry = browserNode(parent);
+		if (entry == null || !entry.localEntry() || parent == localRoot || parentEntry == null)
+		{
+			showSelectionError("Select a PC file or folder inside a listed location");
+			return;
+		}
+		if (JOptionPane.showConfirmDialog(this, "Permanently delete " + entry.localPath() + "?",
+			"Delete PC Item", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)
+		{
+			return;
+		}
+		tasks.run("delete PC item", () -> {
+			deleteLocalPath(entry.localPath());
+			List<DefaultMutableTreeNode> children = localChildren(parentEntry.localPath());
+			SwingUtilities.invokeLater(() -> replaceChildren(localModel, parent, parentEntry, children));
+		});
+	}
+
 	private void createRemoteFolder()
 	{
 		DefaultMutableTreeNode remoteDirectoryNode = selectedRemoteDirectoryNode();
@@ -615,9 +879,9 @@ public final class FileBrowserPanel extends FileDropPanel
 			return;
 		}
 		String cleanName = name.trim();
-		if (cleanName.isBlank() || cleanName.contains("\\") || cleanName.contains("/"))
+		if (cleanName.isBlank() || cleanName.equals(".") || cleanName.equals("..") || invalidRemoteName(cleanName))
 		{
-			showSelectionError("Folder name cannot be blank or contain path separators");
+			showSelectionError("Folder name cannot be blank or contain characters that are not allowed on console storage");
 			return;
 		}
 
@@ -627,6 +891,121 @@ public final class FileBrowserPanel extends FileDropPanel
 			List<DefaultMutableTreeNode> children = remoteChildren(remoteDirectory);
 			SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, remoteDirectoryNode, remoteDirectory, children));
 		});
+	}
+
+	private void renameSelectedRemote()
+	{
+		DefaultMutableTreeNode remoteNode = selectedNode(remoteTree);
+		BrowserNode remoteEntry = browserNode(remoteNode);
+		DefaultMutableTreeNode parent = parentNode(remoteNode);
+		BrowserNode parentEntry = browserNode(parent);
+		if (remoteEntry == null || !remoteEntry.remoteEntry() || parent == remoteRoot || parentEntry == null)
+		{
+			showSelectionError("Select a console file or folder inside a drive");
+			return;
+		}
+		String currentName = displayRemoteName(remoteEntry.remotePath());
+		String value = JOptionPane.showInputDialog(this, "New name", currentName);
+		if (value == null)
+		{
+			return;
+		}
+		String name = value.trim();
+		if (name.isBlank() || name.equals(".") || name.equals("..") || invalidRemoteName(name))
+		{
+			showSelectionError("Name cannot be blank or contain characters that are not allowed on console storage");
+			return;
+		}
+		if (name.equals(currentName))
+		{
+			return;
+		}
+		String destination = childRemotePath(parentEntry.remotePath(), name);
+		if (!confirmRename(friendlyRemotePath(remoteEntry.remotePath()), friendlyRemotePath(destination)))
+		{
+			return;
+		}
+		tasks.run("rename remote item", () -> {
+			service.renamePath(remoteEntry.remotePath(), destination);
+			List<DefaultMutableTreeNode> children = remoteChildren(parentEntry);
+			SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, parent, parentEntry, children));
+		});
+	}
+
+	private void showSelectedRemoteProperties()
+	{
+		DefaultMutableTreeNode remoteNode = selectedNode(remoteTree);
+		BrowserNode remoteEntry = browserNode(remoteNode);
+		if (remoteEntry == null || !remoteEntry.remoteEntry() || parentNode(remoteNode) == remoteRoot)
+		{
+			showSelectionError("Select a console file or folder inside a drive");
+			return;
+		}
+		tasks.run("load remote properties", () -> {
+			ConsoleService.RemoteFileProperties properties = service.remoteFileProperties(remoteEntry.remotePath());
+			SwingUtilities.invokeLater(() -> editRemoteProperties(remoteNode, remoteEntry, properties));
+		});
+	}
+
+	private void editRemoteProperties(DefaultMutableTreeNode remoteNode, BrowserNode entry,
+	                                  ConsoleService.RemoteFileProperties properties)
+	{
+		JPanel fields = new JPanel(new GridBagLayout());
+		GridBagConstraints constraints = propertyConstraints();
+		addPropertyRow(fields, constraints, 0, "Path", friendlyRemotePath(entry.remotePath()));
+		addPropertyRow(fields, constraints, 1, "Type", properties.directory() ? "Folder" : "File");
+		addPropertyRow(fields, constraints, 2, "Size", properties.directory() ? "-" : formatSize(properties.size()));
+		addPropertyRow(fields, constraints, 3, "Created", formatPropertyTime(properties.created()));
+		addPropertyRow(fields, constraints, 4, "Modified", formatPropertyTime(properties.changed()));
+		addPropertyRow(fields, constraints, 5, "System", properties.system() ? "Yes" : "No");
+		addPropertyRow(fields, constraints, 6, "Archive", properties.archive() ? "Yes" : "No");
+		JCheckBox readOnly = new JCheckBox("Read-only", properties.readOnly());
+		JCheckBox hidden = new JCheckBox("Hidden", properties.hidden());
+		constraints.gridx = 0;
+		constraints.gridy = 7;
+		constraints.gridwidth = 2;
+		fields.add(readOnly, constraints);
+		constraints.gridy = 8;
+		fields.add(hidden, constraints);
+		if (JOptionPane.showConfirmDialog(this, fields, "Remote Properties",
+			JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION)
+		{
+			return;
+		}
+		ConsoleService.RemoteFileProperties changed = new ConsoleService.RemoteFileProperties(
+			properties.size(), properties.created(), properties.changed(), properties.directory(),
+			readOnly.isSelected(), hidden.isSelected(), properties.system(), properties.archive());
+		tasks.run("save remote properties", () -> {
+			service.setRemoteFileProperties(entry.remotePath(), changed);
+			DefaultMutableTreeNode parent = parentNode(remoteNode);
+			BrowserNode parentEntry = browserNode(parent);
+			if (parent != null && parentEntry != null)
+			{
+				List<DefaultMutableTreeNode> children = remoteChildren(parentEntry);
+				SwingUtilities.invokeLater(() -> replaceChildren(remoteModel, parent, parentEntry, children));
+			}
+		});
+	}
+
+	private static void addPropertyRow(JPanel panel, GridBagConstraints constraints, int row,
+	                                   String name, String value)
+	{
+		constraints.gridwidth = 1;
+		constraints.weightx = 0;
+		constraints.gridx = 0;
+		constraints.gridy = row;
+		panel.add(new JLabel(name), constraints);
+		constraints.weightx = 1;
+		constraints.gridx = 1;
+		JTextField display = new JTextField(value, 36);
+		display.setEditable(false);
+		display.setCaretPosition(0);
+		panel.add(display, constraints);
+	}
+
+	private static String formatPropertyTime(Instant value)
+	{
+		return value == null ? "Not reported" : PROPERTY_TIME.format(value);
 	}
 
 	private void deleteSelectedRemote()
@@ -643,8 +1022,9 @@ public final class FileBrowserPanel extends FileDropPanel
 			showSelectionError("Drive roots cannot be deleted from the browser");
 			return;
 		}
-		if (JOptionPane.showConfirmDialog(this, friendlyRemotePath(remoteEntry.remotePath()),
-			"Delete Remote", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION)
+		if (JOptionPane.showConfirmDialog(this,
+			"Permanently delete " + friendlyRemotePath(remoteEntry.remotePath()) + "?",
+			"Delete Xbox Item", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)
 		{
 			return;
 		}
@@ -687,8 +1067,9 @@ public final class FileBrowserPanel extends FileDropPanel
 		return entry.directory() ? selected : parentNode(selected);
 	}
 
-	private void updateSelectedPaths(TreeSelectionEvent ignored)
+	private void updateSelectedPaths(TreeSelectionEvent event)
 	{
+		activeSide = event.getSource() == localTree ? BrowserSide.LOCAL : BrowserSide.REMOTE;
 		BrowserNode local = browserNode(selectedNode(localTree));
 		BrowserNode remote = browserNode(selectedNode(remoteTree));
 		localPath.setText(local != null && local.localEntry() ? local.localPath().toString() : " ");
@@ -719,6 +1100,12 @@ public final class FileBrowserPanel extends FileDropPanel
 			return true;
 		}
 		return JOptionPane.showConfirmDialog(this, destination + " already exists", "Overwrite", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION;
+	}
+
+	private boolean confirmRename(String source, String destination)
+	{
+		return JOptionPane.showConfirmDialog(this, "Rename " + source + " to " + destination + "?",
+			"Confirm Rename", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE) == JOptionPane.YES_OPTION;
 	}
 
 	private void showSelectionError(String message)
@@ -774,6 +1161,68 @@ public final class FileBrowserPanel extends FileDropPanel
 	{
 		Path fileName = path.getFileName();
 		return fileName == null ? path.toString() : fileName.toString();
+	}
+
+	private static String formatSize(long size)
+	{
+		if (size < 1024)
+		{
+			return size + " B";
+		}
+		if (size < 1024L * 1024L)
+		{
+			return String.format(Locale.ROOT, "%.1f KB", size / 1024.0);
+		}
+		if (size < 1024L * 1024L * 1024L)
+		{
+			return String.format(Locale.ROOT, "%.1f MB", size / (1024.0 * 1024.0));
+		}
+		return String.format(Locale.ROOT, "%.1f GB", size / (1024.0 * 1024.0 * 1024.0));
+	}
+
+	private static boolean invalidRemoteName(String name)
+	{
+		for (int index = 0; index < name.length(); index++)
+		{
+			char value = name.charAt(index);
+			if (value < 32 || "\\/:*?\"<>|".indexOf(value) >= 0)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean invalidLocalName(String name)
+	{
+		return name.indexOf('\0') >= 0 || name.contains("/") || name.contains("\\");
+	}
+
+	private static void deleteLocalPath(Path path) throws IOException
+	{
+		if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+		{
+			Files.delete(path);
+			return;
+		}
+		List<Path> entries;
+		try (Stream<Path> stream = Files.walk(path))
+		{
+			entries = stream.sorted(Comparator.reverseOrder()).toList();
+		}
+		for (Path entry : entries)
+		{
+			Files.delete(entry);
+		}
+	}
+
+	private static GridBagConstraints propertyConstraints()
+	{
+		GridBagConstraints constraints = new GridBagConstraints();
+		constraints.anchor = GridBagConstraints.WEST;
+		constraints.fill = GridBagConstraints.HORIZONTAL;
+		constraints.insets = new Insets(4, 6, 4, 6);
+		return constraints;
 	}
 
 	private static String ensureRemoteDirectory(String path)
@@ -859,6 +1308,11 @@ public final class FileBrowserPanel extends FileDropPanel
 	}
 
 	private record DisplayAlias(String displayName, String actualName)
+	{
+	}
+
+	private record LocalProperties(long size, Instant created, Instant changed, boolean directory,
+	                               boolean readOnly, boolean hidden)
 	{
 	}
 
@@ -1094,5 +1548,11 @@ public final class FileBrowserPanel extends FileDropPanel
 		REMOTE_ROOT,
 		REMOTE_ENTRY,
 		PLACEHOLDER
+	}
+
+	private enum BrowserSide
+	{
+		LOCAL,
+		REMOTE
 	}
 }

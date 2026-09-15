@@ -4,6 +4,7 @@ import com.jjrpc.JRPC;
 import com.jjrpc.xdevkit.XbdmNotificationSession;
 
 import java.io.IOException;
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -23,6 +24,7 @@ public final class DebuggerService
 {
 	private static final Pattern FIELD = Pattern.compile(
 		"(?i)([a-z][a-z0-9_]*)=(\"(?:\\\\.|[^\"])*\"|\\S+)");
+	private static final Pattern INTEGER_REGISTER = Pattern.compile("(?i)gpr(?:[0-9]|[12][0-9]|3[01])");
 
 	private final ConsoleService console;
 	private final Object sessionLock = new Object();
@@ -282,6 +284,32 @@ public final class DebuggerService
 		return values;
 	}
 
+	public void writeThreadContext(long threadId, List<RegisterValue> values)
+	{
+		if (threadStopReason(console.rawCommand("isstopped thread=" + hex(threadId))) == null)
+		{
+			throw new IllegalStateException("Stop the thread before writing its context");
+		}
+		if (values == null || values.isEmpty())
+		{
+			throw new IllegalArgumentException("No register values were provided");
+		}
+		StringBuilder update = new StringBuilder("setcontext thread=").append(hex(threadId));
+		Set<String> seen = new LinkedHashSet<>();
+		for (RegisterValue register : values)
+		{
+			String name = registerName(register.name());
+			String key = name.toLowerCase(Locale.ROOT);
+			if (!seen.add(key))
+			{
+				throw new IllegalArgumentException("Duplicate register: " + name);
+			}
+			int bits = key.equals("cr") || key.equals("xer") ? 32 : 64;
+			update.append(' ').append(name).append("=0x").append(registerValue(register.value(), name, bits));
+		}
+		command(update.toString());
+	}
+
 	public void haltThread(long threadId)
 	{
 		command("halt thread=" + hex(threadId));
@@ -500,7 +528,7 @@ public final class DebuggerService
 		int status = statusCode(response);
 		if (status == 408)
 		{
-			return "Running";
+			return null;
 		}
 		if (status >= 200 && status < 300)
 		{
@@ -509,6 +537,52 @@ public final class DebuggerService
 				: Character.toUpperCase(reason.charAt(0)) + reason.substring(1);
 		}
 		throw new IllegalStateException("isstopped failed: " + response);
+	}
+
+	private static String registerName(String value)
+	{
+		String normalized = value == null ? "" : value.trim();
+		for (String control : List.of("Msr", "Iar", "Lr", "Ctr", "Cr", "Xer"))
+		{
+			if (control.equalsIgnoreCase(normalized))
+			{
+				return control;
+			}
+		}
+		if (INTEGER_REGISTER.matcher(normalized).matches())
+		{
+			return "Gpr" + Integer.parseInt(normalized.substring(3));
+		}
+		throw new IllegalArgumentException("Register cannot be edited: " + normalized);
+	}
+
+	private static String registerValue(String value, String name, int bits)
+	{
+		String normalized = value == null ? "" : value.trim();
+		int radix = 10;
+		if (normalized.startsWith("0x") || normalized.startsWith("0X"))
+		{
+			normalized = normalized.substring(2);
+			radix = 16;
+		}
+		if (normalized.isBlank())
+		{
+			throw new IllegalArgumentException("Enter a value for " + name);
+		}
+		BigInteger parsed;
+		try
+		{
+			parsed = new BigInteger(normalized, radix);
+		}
+		catch (NumberFormatException failure)
+		{
+			throw new IllegalArgumentException("Invalid value for " + name + ": " + value, failure);
+		}
+		if (parsed.signum() < 0 || parsed.bitLength() > bits)
+		{
+			throw new IllegalArgumentException(name + " must be an unsigned " + bits + "-bit value");
+		}
+		return parsed.toString(16).toUpperCase(Locale.ROOT);
 	}
 
 	private static long parseNumber(String value)

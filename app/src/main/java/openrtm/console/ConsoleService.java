@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +35,7 @@ import java.util.regex.Pattern;
 public final class ConsoleService
 {
 	private static final long XAM_GAMERTAG_ADDRESS = 0x81AA28FCL;
+	private static final long WINDOWS_EPOCH_SECONDS = 11_644_473_600L;
 	private static final long[] TRANSFER_RETRY_DELAYS_MS = {2_000, 3_500, 5_000, 4_000, 6_500};
 
 	private final AppSettings settings = new AppSettings();
@@ -798,6 +800,51 @@ public final class ConsoleService
 		return parseDirectory(response);
 	}
 
+	public synchronized void renamePath(String remotePath, String newRemotePath)
+	{
+		String response = rawCommand("rename name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath)
+			+ " newname=" + JRPC.XbdmXboxConsole.quoteXbdm(newRemotePath));
+		throwIfXbdmError(response, "rename");
+	}
+
+	public synchronized RemoteFileProperties remoteFileProperties(String remotePath)
+	{
+		String response = rawCommand("getfileattributes name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath));
+		throwIfXbdmError(response, "properties");
+		Map<String, String> fields = parseFields(response.replace('\r', ' ').replace('\n', ' '));
+		long size = combineHighLow(fields, "sizehi", "sizelo");
+		long created = combineHighLow(fields, "createhi", "createlo");
+		long changed = combineHighLow(fields, "changehi", "changelo");
+		return new RemoteFileProperties(size, fileTimeInstant(created), fileTimeInstant(changed),
+			attributeEnabled(fields, "directory"), attributeEnabled(fields, "readonly"),
+			attributeEnabled(fields, "hidden"), attributeEnabled(fields, "system"),
+			attributeEnabled(fields, "archive"));
+	}
+
+	public synchronized void setRemoteFileProperties(String remotePath, RemoteFileProperties properties)
+	{
+		Objects.requireNonNull(properties, "properties");
+		long created = instantFileTime(properties.created());
+		long changed = instantFileTime(properties.changed());
+		String response = rawCommand("setfileattributes name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath)
+			+ highLowFields("create", created) + highLowFields("change", changed)
+			+ " readonly=" + (properties.readOnly() ? "1" : "0")
+			+ " hidden=" + (properties.hidden() ? "1" : "0"));
+		throwIfXbdmError(response, "save properties");
+	}
+
+	public synchronized DriveSpace driveSpace(String drive)
+	{
+		String normalized = normalizeDriveName(drive);
+		String response = rawCommand("drivefreespace name=" + JRPC.XbdmXboxConsole.quoteXbdm(normalized));
+		throwIfXbdmError(response, "drive space");
+		Map<String, String> fields = parseFields(response.replace('\r', ' ').replace('\n', ' '));
+		return new DriveSpace(normalized,
+			combineHighLow(fields, "freetocallerhi", "freetocallerlo"),
+			combineHighLow(fields, "totalbyteshi", "totalbyteslo"),
+			combineHighLow(fields, "totalfreebyteshi", "totalfreebyteslo"));
+	}
+
 	public synchronized void makeDirectory(String remotePath)
 	{
 		String response = rawCommand("mkdir name=" + JRPC.XbdmXboxConsole.quoteXbdm(remotePath));
@@ -1280,6 +1327,45 @@ public final class ConsoleService
 		return name + ":\\";
 	}
 
+	private static long combineHighLow(Map<String, String> fields, String high, String low)
+	{
+		return (parseNumber(fields.getOrDefault(high, "0")) << 32)
+			| (parseNumber(fields.getOrDefault(low, "0")) & 0xFFFF_FFFFL);
+	}
+
+	private static boolean attributeEnabled(Map<String, String> fields, String name)
+	{
+		String value = fields.get(name);
+		return value != null && !value.equals("0") && !value.equalsIgnoreCase("false");
+	}
+
+	private static Instant fileTimeInstant(long value)
+	{
+		if (value == 0)
+		{
+			return null;
+		}
+		long seconds = Long.divideUnsigned(value, 10_000_000L) - WINDOWS_EPOCH_SECONDS;
+		long remainder = Long.remainderUnsigned(value, 10_000_000L);
+		return Instant.ofEpochSecond(seconds, remainder * 100L);
+	}
+
+	private static long instantFileTime(Instant value)
+	{
+		if (value == null)
+		{
+			return 0;
+		}
+		return Math.addExact(Math.multiplyExact(value.getEpochSecond() + WINDOWS_EPOCH_SECONDS, 10_000_000L),
+			value.getNano() / 100L);
+	}
+
+	private static String highLowFields(String name, long value)
+	{
+		return " " + name + "hi=0x" + String.format(Locale.ROOT, "%08X", (value >>> 32) & 0xFFFF_FFFFL)
+			+ " " + name + "lo=0x" + String.format(Locale.ROOT, "%08X", value & 0xFFFF_FFFFL);
+	}
+
 	private static void throwIfXbdmError(String response, String operation)
 	{
 		for (String line : response.split("\\R"))
@@ -1344,13 +1430,14 @@ public final class ConsoleService
 	private static Map<String, String> parseFields(String line)
 	{
 		Map<String, String> fields = new LinkedHashMap<>();
-		Pattern p = Pattern.compile("(?i)([a-z0-9_]+)=((\"[^\"]*\")|\\S+)|\\b(directory)\\b");
+		Pattern p = Pattern.compile(
+			"(?i)([a-z0-9_]+)=((\"[^\"]*\")|\\S+)|\\b(directory|readonly|hidden|system|archive)\\b");
 		Matcher m = p.matcher(line);
 		while (m.find())
 		{
 			if (m.group(4) != null)
 			{
-				fields.put("directory", "true");
+				fields.put(m.group(4).toLowerCase(Locale.ROOT), "true");
 			}
 			else
 			{
@@ -1380,6 +1467,15 @@ public final class ConsoleService
 	}
 
 	public record FileEntry(String name, long size, boolean directory, String raw)
+	{
+	}
+
+	public record RemoteFileProperties(long size, Instant created, Instant changed, boolean directory,
+	                                   boolean readOnly, boolean hidden, boolean system, boolean archive)
+	{
+	}
+
+	public record DriveSpace(String drive, long freeBytesAvailable, long totalBytes, long totalFreeBytes)
 	{
 	}
 
