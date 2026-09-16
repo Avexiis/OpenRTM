@@ -346,7 +346,7 @@ public final class MainFrame extends JFrame
 
 	private JCheckBox discordPresenceToggle()
 	{
-		JCheckBox toggle = new JCheckBox("Discord RPC");
+		JCheckBox toggle = new JCheckBox("Show Xbox Title As Discord Rich Presence (RPC)");
 		toggle.setModel(discordPresence);
 		if (!discordRpc.configured())
 		{
