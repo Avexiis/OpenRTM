@@ -89,7 +89,7 @@ Save any open work before using the reboot or shutdown controls.
 
 ### Discord Rich Presence
 
-When configured in the build, **Show Current Title As Discord Rich Presence (RPC)** shares the connected console's current title. The status refreshes every 30 seconds. Its elapsed timer restarts when the title changes, and the status is cleared when the console disconnects or OpenRTM closes.
+When configured in the build, **Show Xbox Title As Discord Rich Presence (RPC)** shares the connected console's current title. The status refreshes every 30 seconds. Its elapsed timer restarts when the title changes, and the status is cleared when the console disconnects or OpenRTM closes.
 
 Known title IDs are displayed as game names. An unknown title is displayed using its title ID without a leading `0x`.
 
