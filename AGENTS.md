@@ -8,6 +8,8 @@
 - Remove old unit tests and their folders after use unless the test is user-requested. If the test is user requested, leave it alone.
 - Never write developer focused wording into GUI or the user-facing README. This includes method/class/variable names, as well as memory addresses or anything else targeted at developers.
 - Use US English - not UK English - for both code naming schema and docs.
+- The Xbox 360 has not had an update to its dashboard or kernel since 2019. Versioning related to specific memory addresses is not important, as it is unlikely to ever change again. This extends to games as well.
+- If debugging the remote console, do not attempt to read or write to any memory blocks owned by or hooked into by any modules named exactly or similar to the following: `xbguard, cipher, xblghost, proto, xbnetwork, nglive, xblkyuubii, tethered, xbls, nfinite, ninja, xcommunity, snet, myten` without explicit user permission, as doing so may cause anti-tamper actions by the services that represent them.
 
 ### Testing
 You cannot verify runtime visual behavior or GUI layout yourself, even if you have screen-capture or computer use tools available. 
