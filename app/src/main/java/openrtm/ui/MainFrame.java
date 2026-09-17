@@ -230,6 +230,7 @@ public final class MainFrame extends JFrame
 		addFixedPage(navigationModel, "Video Capture", videoCapturePage());
 		addPage(navigationModel, "Memory & Commands", memoryPanel());
 		addPage(navigationModel, "COD Options", new CodOptionsPanel(service, this::runTask));
+		addPage(navigationModel, "Other Games", new OtherGamesPanel(service, this::runTask));
 		addPage(navigationModel, "Debugger", new DebuggerPanel(service.debugger(), this::runTask));
 		addPage(navigationModel, "File Transfer", filesPanel());
 		addPage(navigationModel, "Content Library", new ContentLibraryPanel(service, this::runTask, profileResolver));
