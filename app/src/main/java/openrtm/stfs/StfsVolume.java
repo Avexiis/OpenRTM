@@ -258,6 +258,39 @@ final class StfsVolume
 		entries = null;
 	}
 
+	void verifyWritableIntegrity() throws IOException
+	{
+		Set<Long> claimed = new HashSet<>();
+		claimBlocks(claimed, chain(directoryFirstBlock, directoryBlockCount, false));
+		for (Entry entry : entries())
+		{
+			if (entry.directory())
+			{
+				continue;
+			}
+			int requiredBlocks = Math.toIntExact((entry.size() + BLOCK_SIZE - 1) / BLOCK_SIZE);
+			if (entry.allocatedBlocks() < requiredBlocks)
+			{
+				throw new IOException("Package file allocation is smaller than its data");
+			}
+			claimBlocks(claimed, chain(entry.firstBlock(), requiredBlocks, false));
+		}
+		try (FileChannel channel = FileChannel.open(packageFile, StandardOpenOption.READ))
+		{
+			byte[] descriptor = PackageService.read(channel, PackageService.VOLUME_DESCRIPTOR_OFFSET, 28);
+			byte[] expectedRoot = Arrays.copyOfRange(descriptor, 8, 28);
+			byte[] root = readHashBlock(channel, 0, rootHierarchy);
+			if (!MessageDigest.isEqual(expectedRoot, sha1(root)))
+			{
+				throw new IOException("Package hash tree root is invalid");
+			}
+			for (long logical : claimed)
+			{
+				verifyDataBlock(channel, logical);
+			}
+		}
+	}
+
 	private void writeRebuiltVolume(List<BuildEntry> buildEntries) throws IOException
 	{
 		int directoryBlocks = Math.max(1,
@@ -279,6 +312,19 @@ final class StfsVolume
 
 		byte[] directoryData = buildDirectory(buildEntries, directoryBlocks);
 		List<byte[]> logicalBlocks = new ArrayList<>(Math.toIntExact(nextBlock));
+		long[] blockChains = new long[Math.toIntExact(nextBlock)];
+		Arrays.fill(blockChains, 0xFFFFFFL);
+		for (int block = 0; block < directoryBlocks - 1; block++)
+		{
+			blockChains[block] = block + 1L;
+		}
+		for (BuildEntry entry : buildEntries)
+		{
+			for (int block = 0; !entry.directory() && block < entry.blockCount - 1; block++)
+			{
+				blockChains[Math.toIntExact(entry.firstBlock + block)] = entry.firstBlock + block + 1;
+			}
+		}
 		for (int block = 0; block < directoryBlocks; block++)
 		{
 			logicalBlocks.add(Arrays.copyOfRange(directoryData, block * BLOCK_SIZE, (block + 1) * BLOCK_SIZE));
@@ -327,7 +373,7 @@ final class StfsVolume
 					PackageService.write(output, calculatedDataOffset(logical),
 						logicalBlocks.get(logical));
 				}
-				byte[] rootHash = writeHashTree(output, logicalBlocks, directoryBlocks);
+				byte[] rootHash = writeHashTree(output, logicalBlocks, blockChains);
 				PackageService.write(output, descriptor + 8L, rootHash);
 				output.force(true);
 			}
@@ -384,7 +430,7 @@ final class StfsVolume
 		return directory;
 	}
 
-	private byte[] writeHashTree(FileChannel output, List<byte[]> blocks, int directoryBlocks) throws IOException
+	private byte[] writeHashTree(FileChannel output, List<byte[]> blocks, long[] blockChains) throws IOException
 	{
 		int hierarchy = blocks.size() > BLOCKS_PER_LEVEL[1] ? 2 : blocks.size() > BLOCKS_PER_LEVEL[0] ? 1 : 0;
 		List<byte[]> current = new ArrayList<>();
@@ -402,8 +448,7 @@ final class StfsVolume
 				int offset = entry * HASH_ENTRY_SIZE;
 				System.arraycopy(sha1(blocks.get(logical)), 0, hashBlock, offset, 20);
 				hashBlock[offset + 20] = (byte) 0x80;
-				long next = logical < directoryBlocks - 1 ? logical + 1L : 0xFFFFFFL;
-				putUint24be(hashBlock, offset + 21, next);
+				putUint24be(hashBlock, offset + 21, blockChains[logical]);
 			}
 			long representative = (long) group * 0xAA;
 			PackageService.write(output, calculatedHashOffset(representative, 0, 0), hashBlock);
@@ -422,6 +467,8 @@ final class StfsVolume
 						hashBlock, entry * HASH_ENTRY_SIZE, 20);
 				}
 				long representative = (long) group * BLOCKS_PER_LEVEL[level];
+				putInt32be(hashBlock, BLOCK_SIZE - 4,
+					Math.toIntExact(Math.min(BLOCKS_PER_LEVEL[level], blocks.size() - representative)));
 				PackageService.write(output, calculatedHashOffset(representative, level, 0), hashBlock);
 				PackageService.write(output, calculatedHashOffset(representative, level, 1), hashBlock);
 				parents.add(hashBlock);
@@ -429,6 +476,44 @@ final class StfsVolume
 			current = parents;
 		}
 		return sha1(current.get(0));
+	}
+
+	private void verifyDataBlock(FileChannel channel, long logical) throws IOException
+	{
+		byte[] levelZero = readHashBlock(channel, logical, 0);
+		int entryOffset = (int) (logical % 0xAA) * HASH_ENTRY_SIZE;
+		if ((levelZero[entryOffset + 20] & 0x80) == 0)
+		{
+			throw new IOException("Package file references an unallocated block");
+		}
+		byte[] expected = Arrays.copyOfRange(levelZero, entryOffset, entryOffset + 20);
+		if (!MessageDigest.isEqual(expected, sha1(readDataBlock(channel, logical))))
+		{
+			throw new IOException("Package data block hash is invalid");
+		}
+		for (int level = 0; level < rootHierarchy; level++)
+		{
+			byte[] child = readHashBlock(channel, logical, level);
+			byte[] parent = readHashBlock(channel, logical, level + 1);
+			int parentEntry = (int) ((logical / BLOCKS_PER_LEVEL[level]) % 0xAA);
+			expected = Arrays.copyOfRange(parent, parentEntry * HASH_ENTRY_SIZE,
+				parentEntry * HASH_ENTRY_SIZE + 20);
+			if (!MessageDigest.isEqual(expected, sha1(child)))
+			{
+				throw new IOException("Package hash tree branch is invalid");
+			}
+		}
+	}
+
+	private static void claimBlocks(Set<Long> claimed, List<Long> blocks) throws IOException
+	{
+		for (long block : blocks)
+		{
+			if (!claimed.add(block))
+			{
+				throw new IOException("Package files overlap in storage");
+			}
+		}
 	}
 
 	private long calculatedDataOffset(long logical) throws IOException

@@ -220,6 +220,21 @@ public final class PackageService
 		return volume.readFile(entry);
 	}
 
+	public void verifyStfsIntegrity(Path packageFile) throws IOException
+	{
+		Path source = requireFile(packageFile);
+		Info info = inspect(source);
+		if (!info.stfs())
+		{
+			throw new IOException("Package does not contain an STFS volume");
+		}
+		if (!info.headerHashValid() || Boolean.FALSE.equals(info.signatureValid()))
+		{
+			throw new IOException("Package header failed integrity verification");
+		}
+		new StfsVolume(source).verifyWritableIntegrity();
+	}
+
 	public SaveResult saveInternalFiles(Path source, Path destination, Map<String, byte[]> replacements,
 	                                    boolean createBackup) throws IOException
 	{
@@ -248,6 +263,7 @@ public final class PackageService
 			{
 				throw new IOException("The edited package failed header verification");
 			}
+			verifyStfsIntegrity(temporary);
 			if (createBackup && input.equals(output))
 			{
 				backup = input.resolveSibling(input.getFileName() + ".bak");

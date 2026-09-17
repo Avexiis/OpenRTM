@@ -64,6 +64,7 @@ public final class ProfileTransferService
 			{
 				throw new IOException("The downloaded package does not match the requested profile");
 			}
+			verifyProfile(temporary, "The console profile is damaged and was not saved locally");
 			replace(temporary, output);
 			temporary = null;
 			return new DownloadResult(output, signedOutIndex >= 0);
@@ -91,10 +92,14 @@ public final class ProfileTransferService
 	public UploadResult upload(Path profile) throws IOException
 	{
 		PackageService.Info info = packages.inspect(profile);
-		if (info.contentType() != 0x00010000 || !info.creatorId().matches("(?i)[0-9a-f]{16}"))
+		if (info.contentType() != 0x00010000 || !info.stfs()
+			|| info.signatureType() != PackageService.SignatureType.CON
+			|| !info.creatorId().matches("(?i)[0-9a-f]{16}"))
 		{
 			throw new IOException("Choose an Xbox 360 gamer profile");
 		}
+		verifyProfile(profile, "This profile is damaged or was saved by an older OpenRTM build. "
+			+ "Download a fresh console copy and apply the changes again");
 		if (!activeUsers().isEmpty())
 		{
 			throw new IOException("Sign out all profiles on the console before uploading profile changes");
@@ -108,6 +113,7 @@ public final class ProfileTransferService
 		try
 		{
 			console.downloadFile(remote, backup);
+			verifyProfile(backup, "The existing console profile could not be verified. Nothing was uploaded");
 			uploadAttempted = true;
 			console.uploadFile(local, remote);
 			console.downloadFile(remote, verification);
@@ -115,6 +121,7 @@ public final class ProfileTransferService
 			{
 				throw new IOException("Console verification did not match the edited profile");
 			}
+			verifyProfile(verification, "The uploaded profile could not be verified");
 			return new UploadResult(backup);
 		}
 		catch (IOException failure)
@@ -154,6 +161,18 @@ public final class ProfileTransferService
 			}
 		}
 		return active;
+	}
+
+	private void verifyProfile(Path profile, String message) throws IOException
+	{
+		try
+		{
+			packages.verifyStfsIntegrity(profile);
+		}
+		catch (IOException failure)
+		{
+			throw new IOException(message, failure);
+		}
 	}
 
 	private void waitForState(int index, int state) throws IOException
