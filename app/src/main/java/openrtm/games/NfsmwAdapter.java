@@ -19,6 +19,9 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	private static final long RESET_GAME_BREAKER = 0x8246C150L;
 	private static final long FRONTEND_DATABASE_POINTER = 0x82A2C684L;
 	private static final long INTRO_SKIP = 0x82A2CE01L;
+	private static final long INFINITE_NITROUS = 0x82A2CE71L;
+	private static final long INFINITE_SPEEDBREAKER = 0x82A2D1C6L;
+	//private static final long VISUAL_TREATMENT = 0x828F48B2L; //TODO: Fix yellow filter toggle, this disables the wrong filter. unused for now.
 	private static final long PLAYER_MANAGER_SLOT_POINTER = 0x82C74BD4L;
 	private static final long PLAYER_MANAGER_READY = 0x82C74BDCL;
 	private static final long PLAYER_VTABLE = 0x82092948L;
@@ -34,23 +37,27 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 		new Section("career", "Career"),
 		new Section("pursuit", "Pursuit"),
 		new Section("driving", "Driving"),
-		new Section("travel", "Travel"));
+		//new Section("visual", "Visual"), //TODO: Fix yellow filter toggle
+		new Section("travel", "Fast Travel"));
 	private static final List<NumberControl> NUMBERS = List.of(
 		new NumberControl("cash", "Cash", "career", 0, MAXIMUM_VALUE, MAXIMUM_ADJUSTMENT, 10_000),
 		new NumberControl("bounty", "Bounty", "career", 0, MAXIMUM_VALUE, MAXIMUM_ADJUSTMENT, 10_000));
 	private static final List<SliderControl> SLIDERS = List.of(
 		new SliderControl("heat", "Heat", "pursuit", 10, 50, 10, 10));
-	private static final List<MeterControl> METERS = List.of(
-		new MeterControl("speedbreaker", "Speedbreaker", "driving"));
+//	private static final List<MeterControl> METERS = List.of(
+//		new MeterControl("speedbreaker", "Speedbreaker", "driving")); //nobody cares for this, and it takes up too much space
 	private static final List<Toggle> TOGGLES = List.of(
 		new Toggle("cops", "Cops", "Enabled", "pursuit", true, false),
-		new Toggle("skip_intro", "Career Intro", "Skip New Career Intro", "career", false, true));
+		new Toggle("skip_intro", "Career Intro", "Skip New Career Intro", "career", false, true),
+		new Toggle("infinite_speedbreaker", "Infinite Speedbreaker", "Enabled", "driving", false, true),
+		new Toggle("infinite_nitrous", "Infinite Nitrous", "Enabled", "driving", false, true)/*,*/
+		/*new Toggle("hide_yellow_filter", "Yellow Filter", "Hidden", "visual", false, true)*/); //TODO: Fix yellow filter toggle
 	private static final List<Action> ACTIONS = List.of(
 		new Action("start_pursuit", "Start Pursuit", "pursuit"),
 		new Action("prevent_bust", "Prevent Bust", "pursuit"),
-		new Action("refill_speedbreaker", "Refill", "driving"),
-		new Action("empty_speedbreaker", "Empty", "driving"),
-		new Action("toggle_speedbreaker", "Toggle", "driving"),
+//		new Action("refill_speedbreaker", "Refill", "driving"), //deprecated by infinite toggle
+//		new Action("empty_speedbreaker", "Empty", "driving"), //deprecated by infinite toggle
+//		new Action("toggle_speedbreaker", "Toggle", "driving"), //deprecated by infinite toggle
 		new Action("safe_house", "Safe House", "travel"),
 		new Action("car_lot", "Car Lot", "travel"));
 
@@ -83,11 +90,11 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 		return SLIDERS;
 	}
 
-	@Override
-	public List<MeterControl> meterControls()
-	{
-		return METERS;
-	}
+//	@Override
+//	public List<MeterControl> meterControls()
+//	{
+//		return METERS; //disabled along with speedbreaker meter
+//	}
 
 	@Override
 	public List<Toggle> toggles()
@@ -160,11 +167,14 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	@Override
 	protected boolean onReadToggle(String key)
 	{
-		if (!"skip_intro".equals(key))
+		return switch (key)
 		{
-			throw unknown(key);
-		}
-		return readUnsignedByte(INTRO_SKIP) != 0;
+			case "skip_intro" -> readToggleByte(INTRO_SKIP, "career intro") != 0;
+			case "infinite_speedbreaker" -> readToggleByte(INFINITE_SPEEDBREAKER, "Speedbreaker") != 0;
+			case "infinite_nitrous" -> readToggleByte(INFINITE_NITROUS, "nitrous") != 0;
+			//case "hide_yellow_filter" -> readToggleByte(VISUAL_TREATMENT, "yellow filter") == 0; //TODO: Fix yellow filter toggle
+			default -> throw unknown(key);
+		};
 	}
 
 	@Override
@@ -176,14 +186,11 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 				currentPlayer();
 				callVoid(SET_COPS_ENABLED, enabled);
 			}
-			case "skip_intro" -> {
-				int expected = enabled ? 1 : 0;
-				writeByte(INTRO_SKIP, expected);
-				if (readUnsignedByte(INTRO_SKIP) != expected)
-				{
-					throw new IllegalStateException("The game did not retain the career intro setting");
-				}
-			}
+			case "skip_intro" -> writeToggleByte(INTRO_SKIP, enabled ? 1 : 0, "career intro");
+			case "infinite_speedbreaker" ->
+				writeToggleByte(INFINITE_SPEEDBREAKER, enabled ? 1 : 0, "Speedbreaker");
+			case "infinite_nitrous" -> writeToggleByte(INFINITE_NITROUS, enabled ? 1 : 0, "nitrous");
+			//case "hide_yellow_filter" -> writeToggleByte(VISUAL_TREATMENT, enabled ? 0 : 1, "yellow filter"); //TODO: Fix yellow filter toggle
 			default -> throw unknown(key);
 		}
 	}
@@ -278,6 +285,26 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	private long readPointer(long address, String label)
 	{
 		return requirePointer(Integer.toUnsignedLong(readIntBig(address)), label);
+	}
+
+	private int readToggleByte(long address, String label)
+	{
+		int value = readUnsignedByte(address);
+		if (value > 1)
+		{
+			throw new IllegalStateException("The current " + label + " setting is not valid");
+		}
+		return value;
+	}
+
+	private void writeToggleByte(long address, int value, String label)
+	{
+		readToggleByte(address, label);
+		writeByte(address, value);
+		if (readToggleByte(address, label) != value)
+		{
+			throw new IllegalStateException("The game did not retain the " + label + " setting");
+		}
 	}
 
 	private long requirePointer(long pointer, String label)
