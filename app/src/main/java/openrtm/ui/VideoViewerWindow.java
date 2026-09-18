@@ -59,6 +59,11 @@ public final class VideoViewerWindow extends JFrame
 		display.clear();
 	}
 
+	public void showMessage(String message)
+	{
+		display.showMessage(message);
+	}
+
 	public void resolution(Resolution value)
 	{
 		resolution = value;

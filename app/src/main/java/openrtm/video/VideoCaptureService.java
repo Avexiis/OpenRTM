@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_AAC;
-import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_MPEG4;
+import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_H264;
 import static org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_PCM_S16LE;
 import static org.bytedeco.ffmpeg.global.avutil.AV_LOG_FATAL;
 import static org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_YUV420P;
@@ -49,6 +49,7 @@ import static org.bytedeco.opencv.global.opencv_videoio.CAP_V4L2;
 public final class VideoCaptureService implements AutoCloseable
 {
 	private static final long RETRY_DELAY_MS = 750;
+	private static final String DEVICE_IN_USE_MESSAGE = "Capture device is in use by another app";
 
 	private final Listener listener;
 	private final ExecutorService videoExecutor = Executors.newSingleThreadExecutor(r ->
@@ -89,6 +90,12 @@ public final class VideoCaptureService implements AutoCloseable
 		long token = generation.incrementAndGet();
 		latestImage = null;
 		latestFrameRate = 0;
+		if (CaptureDeviceDiscovery.videoDeviceInUse(config.videoDevice()))
+		{
+			listener.onState(State.DEVICE_IN_USE, DEVICE_IN_USE_MESSAGE);
+			listener.onAudioState("Audio off");
+			return;
+		}
 		listener.onState(State.STARTING, "Starting video capture");
 		videoExecutor.submit(() -> captureLoop(token, config));
 		if (config.audioDevice() != null && config.audioDevice().enabled())
@@ -199,6 +206,11 @@ public final class VideoCaptureService implements AutoCloseable
 	{
 		while (current(token))
 		{
+			if (CaptureDeviceDiscovery.videoDeviceInUse(config.videoDevice()))
+			{
+				reportDeviceInUse();
+				return;
+			}
 			for (Decoder decoder : decoderOrder(config.decoder()))
 			{
 				if (!current(token))
@@ -214,6 +226,11 @@ public final class VideoCaptureService implements AutoCloseable
 				}
 				catch (Throwable failure)
 				{
+					if (current(token) && CaptureDeviceDiscovery.videoDeviceInUse(config.videoDevice()))
+					{
+						reportDeviceInUse();
+						return;
+					}
 					if (current(token) && config.decoder() != Decoder.AUTOMATIC)
 					{
 						listener.onState(State.NO_INPUT, "No input source detected");
@@ -242,6 +259,16 @@ public final class VideoCaptureService implements AutoCloseable
 				sleepBeforeRetry();
 			}
 		}
+	}
+
+	private void reportDeviceInUse()
+	{
+		synchronized (imageLock)
+		{
+			latestImage = null;
+		}
+		latestFrameRate = 0;
+		listener.onState(State.DEVICE_IN_USE, DEVICE_IN_USE_MESSAGE);
 	}
 
 	private void readFrames(long token, FrameGrabber grabber, Decoder decoder) throws FrameGrabber.Exception
@@ -742,6 +769,7 @@ public final class VideoCaptureService implements AutoCloseable
 	{
 		STARTING,
 		LIVE,
+		DEVICE_IN_USE,
 		NO_INPUT,
 		STOPPED
 	}
@@ -781,8 +809,9 @@ public final class VideoCaptureService implements AutoCloseable
 			recorder = new FFmpegFrameRecorder(destination.toFile(), width, height,
 				audio ? audioFormat.getChannels() : 0);
 			recorder.setFormat("mp4");
-			recorder.setVideoCodec(AV_CODEC_ID_MPEG4);
+			recorder.setVideoCodec(AV_CODEC_ID_H264);
 			recorder.setPixelFormat(AV_PIX_FMT_YUV420P);
+			recorder.setOption("movflags", "+faststart");
 			double recordingFrameRate = measuredFrameRate >= 20 ? Math.rint(measuredFrameRate) : 60;
 			recordingFrameRate = Math.max(20, Math.min(60, recordingFrameRate));
 			recorder.setFrameRate(recordingFrameRate);

@@ -92,6 +92,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 	private boolean screenshotActionPending;
 	private boolean shuttingDown;
 	private boolean loading = true;
+	private String overlayMessage = "No input source detected";
 	private VideoViewerWindow viewer;
 
 	public VideoCapturePanel()
@@ -152,15 +153,17 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 		{
 			status.setText(message);
 			status.setForeground(state == VideoCaptureService.State.LIVE ? OK : WARN);
-			if (state == VideoCaptureService.State.NO_INPUT || state == VideoCaptureService.State.STOPPED)
+			if (state == VideoCaptureService.State.DEVICE_IN_USE
+				|| state == VideoCaptureService.State.NO_INPUT || state == VideoCaptureService.State.STOPPED)
 			{
+				overlayMessage = message;
 				record.setEnabled(capture.isRecording() && !recordActionPending);
 				screenshot.setEnabled(false);
 				clearFrameBuffers();
-				display.clear();
+				display.showMessage(message);
 				if (viewer != null)
 				{
-					viewer.clear();
+					viewer.showMessage(message);
 				}
 			}
 		});
@@ -622,6 +625,12 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 			}
 			status.setText("No capture devices found");
 			status.setForeground(WARN);
+			overlayMessage = "No capture devices found";
+			display.showMessage(overlayMessage);
+			if (viewer != null)
+			{
+				viewer.showMessage(overlayMessage);
+			}
 		}
 		else
 		{
@@ -780,6 +789,10 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 		if (image != null)
 		{
 			viewer.showFrame(image);
+		}
+		else
+		{
+			viewer.showMessage(overlayMessage);
 		}
 		viewer.setVisible(true);
 	}

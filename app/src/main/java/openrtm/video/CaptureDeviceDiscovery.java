@@ -210,6 +210,67 @@ public final class CaptureDeviceDiscovery
 		return preferred;
 	}
 
+	public static boolean videoDeviceInUse(VideoDevice device)
+	{
+		if (!isLinux() || device == null)
+		{
+			return false;
+		}
+		Path devicePath;
+		try
+		{
+			devicePath = Path.of(device.locator()).toRealPath();
+		}
+		catch (IOException | RuntimeException ignored)
+		{
+			return false;
+		}
+		String currentProcess = Long.toString(ProcessHandle.current().pid());
+		try (DirectoryStream<Path> processes = Files.newDirectoryStream(Path.of("/proc")))
+		{
+			for (Path process : processes)
+			{
+				String processName = process.getFileName().toString();
+				if (processName.equals(currentProcess) || !processName.chars().allMatch(Character::isDigit))
+				{
+					continue;
+				}
+				if (processUsesDevice(process.resolve("fd"), devicePath))
+				{
+					return true;
+				}
+			}
+		}
+		catch (IOException | SecurityException ignored)
+		{
+		}
+		return false;
+	}
+
+	private static boolean processUsesDevice(Path descriptorDirectory, Path device)
+	{
+		try (DirectoryStream<Path> descriptors = Files.newDirectoryStream(descriptorDirectory))
+		{
+			for (Path descriptor : descriptors)
+			{
+				try
+				{
+					if (Files.isSameFile(descriptor, device))
+					{
+						return true;
+					}
+				}
+				catch (IOException | SecurityException ignored)
+				{
+				}
+			}
+		}
+		catch (IOException | SecurityException ignored)
+		{
+		}
+		return false;
+	}
+
 	public static String primaryVideoDeviceId(String id)
 	{
 		if (!isLinux() || id == null || id.isEmpty())

@@ -16,9 +16,11 @@ public final class VideoDisplayPanel extends JPanel
 	private static final long SIGNAL_TIMEOUT_NANOS = TimeUnit.MILLISECONDS.toNanos(1_500);
 	private static final Color BACKGROUND = new Color(8, 9, 11);
 	private static final Color MESSAGE = new Color(190, 194, 201);
+	private static final String NO_INPUT_MESSAGE = "No input source detected";
 
 	private volatile BufferedImage image;
 	private volatile long frameReceivedAt;
+	private volatile String message = NO_INPUT_MESSAGE;
 	private final Timer signalTimer;
 
 	public VideoDisplayPanel()
@@ -47,13 +49,20 @@ public final class VideoDisplayPanel extends JPanel
 	{
 		image = frame;
 		frameReceivedAt = System.nanoTime();
+		message = NO_INPUT_MESSAGE;
 		repaint();
 	}
 
 	public void clear()
 	{
+		showMessage(NO_INPUT_MESSAGE);
+	}
+
+	public void showMessage(String value)
+	{
 		image = null;
 		frameReceivedAt = 0;
+		message = value;
 		repaint();
 	}
 
@@ -73,7 +82,7 @@ public final class VideoDisplayPanel extends JPanel
 			}
 			else
 			{
-				drawNoInput(canvas);
+				drawMessage(canvas);
 			}
 		}
 		finally
@@ -97,9 +106,8 @@ public final class VideoDisplayPanel extends JPanel
 		canvas.drawImage(frame, x, y, width, height, null);
 	}
 
-	private void drawNoInput(Graphics2D canvas)
+	private void drawMessage(Graphics2D canvas)
 	{
-		String message = "No input source detected";
 		FontMetrics metrics = canvas.getFontMetrics();
 		int x = Math.max(12, (getWidth() - metrics.stringWidth(message)) / 2);
 		int y = Math.max(metrics.getAscent() + 12,
