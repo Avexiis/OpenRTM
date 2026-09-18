@@ -214,6 +214,11 @@ abstract class AbstractOtherGameAdapter implements OtherGameAdapter
 		console.writeByte(address, value);
 	}
 
+	protected final void write(long address, byte[] value)
+	{
+		console.writeMemory(address, value);
+	}
+
 	protected final IllegalArgumentException unknown(String key)
 	{
 		return new IllegalArgumentException("Unknown option for " + game.tabName() + ": " + key);

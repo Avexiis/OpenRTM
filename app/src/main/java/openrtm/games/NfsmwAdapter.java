@@ -2,6 +2,10 @@ package openrtm.games;
 
 import openrtm.console.ConsoleService;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 final class NfsmwAdapter extends AbstractOtherGameAdapter
@@ -21,7 +25,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	private static final long INTRO_SKIP = 0x82A2CE01L;
 	private static final long INFINITE_NITROUS = 0x82A2CE71L;
 	private static final long INFINITE_SPEEDBREAKER = 0x82A2D1C6L;
-	//private static final long VISUAL_TREATMENT = 0x828F48B2L; //TODO: Fix yellow filter toggle, this disables the wrong filter. unused for now.
+	private static final long VISUAL_TREATMENT_POINTER = 0x82A2C4D4L;
 	private static final long PLAYER_MANAGER_SLOT_POINTER = 0x82C74BD4L;
 	private static final long PLAYER_MANAGER_READY = 0x82C74BDCL;
 	private static final long PLAYER_VTABLE = 0x82092948L;
@@ -29,15 +33,22 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	private static final long CAREER_SETTINGS_OFFSET = 0xB0L;
 	private static final long CASH_OFFSET = 0x0CL;
 	private static final long GAME_BREAKER_CHARGE_OFFSET = 0x38L;
+	private static final long[] VISUAL_LOOK_POINTER_OFFSETS = {0x18CL, 0x1A0L, 0x1B4L};
+	private static final long VISUAL_LOOK_TINT_OFFSET = 0xC0L;
 	private static final long MINIMUM_POINTER = 0x80000000L;
 	private static final long MAXIMUM_POINTER = 0xD0000000L;
 	private static final long MAXIMUM_VALUE = 2_000_000_000L;
 	private static final long MAXIMUM_ADJUSTMENT = MAXIMUM_VALUE;
+	private static final Tint NEUTRAL_TINT = new Tint(1.0F, 1.0F, 1.0F);
+	private static final List<Tint> STOCK_TINTS = List.of(
+		new Tint(0.85F, 0.75F, 0.25F),
+		new Tint(0.56F, 0.78F, 0.93F),
+		new Tint(0.05F, 0.05F, 0.80F));
 	private static final List<Section> SECTIONS = List.of(
 		new Section("career", "Career"),
 		new Section("pursuit", "Pursuit"),
 		new Section("driving", "Driving"),
-		//new Section("visual", "Visual"), //TODO: Fix yellow filter toggle
+		new Section("visual", "Visual"),
 		new Section("travel", "Fast Travel"));
 	private static final List<NumberControl> NUMBERS = List.of(
 		new NumberControl("cash", "Cash", "career", 0, MAXIMUM_VALUE, MAXIMUM_ADJUSTMENT, 10_000),
@@ -50,8 +61,8 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 		new Toggle("cops", "Cops", "Enabled", "pursuit", true, false),
 		new Toggle("skip_intro", "Career Intro", "Skip New Career Intro", "career", false, true),
 		new Toggle("infinite_speedbreaker", "Infinite Speedbreaker", "Enabled", "driving", false, true),
-		new Toggle("infinite_nitrous", "Infinite Nitrous", "Enabled", "driving", false, true)/*,*/
-		/*new Toggle("hide_yellow_filter", "Yellow Filter", "Hidden", "visual", false, true)*/); //TODO: Fix yellow filter toggle
+		new Toggle("infinite_nitrous", "Infinite Nitrous", "Enabled", "driving", false, true),
+		new Toggle("hide_yellow_filter", "Yellow Filter", "Hidden", "visual", false, true));
 	private static final List<Action> ACTIONS = List.of(
 		new Action("start_pursuit", "Start Pursuit", "pursuit"),
 		new Action("prevent_bust", "Prevent Bust", "pursuit"),
@@ -60,6 +71,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 //		new Action("toggle_speedbreaker", "Toggle", "driving"), //deprecated by infinite toggle
 		new Action("safe_house", "Safe House", "travel"),
 		new Action("car_lot", "Car Lot", "travel"));
+	private List<TintBackup> tintBackups = List.of();
 
 	NfsmwAdapter(ConsoleService console)
 	{
@@ -172,7 +184,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 			case "skip_intro" -> readToggleByte(INTRO_SKIP, "career intro") != 0;
 			case "infinite_speedbreaker" -> readToggleByte(INFINITE_SPEEDBREAKER, "Speedbreaker") != 0;
 			case "infinite_nitrous" -> readToggleByte(INFINITE_NITROUS, "nitrous") != 0;
-			//case "hide_yellow_filter" -> readToggleByte(VISUAL_TREATMENT, "yellow filter") == 0; //TODO: Fix yellow filter toggle
+			case "hide_yellow_filter" -> yellowFilterHidden(visualLookAttributes());
 			default -> throw unknown(key);
 		};
 	}
@@ -190,7 +202,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 			case "infinite_speedbreaker" ->
 				writeToggleByte(INFINITE_SPEEDBREAKER, enabled ? 1 : 0, "Speedbreaker");
 			case "infinite_nitrous" -> writeToggleByte(INFINITE_NITROUS, enabled ? 1 : 0, "nitrous");
-			//case "hide_yellow_filter" -> writeToggleByte(VISUAL_TREATMENT, enabled ? 0 : 1, "yellow filter"); //TODO: Fix yellow filter toggle
+			case "hide_yellow_filter" -> setYellowFilterHidden(enabled);
 			default -> throw unknown(key);
 		}
 	}
@@ -282,6 +294,151 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 		return current;
 	}
 
+	private long[] visualLookAttributes()
+	{
+		long treatment = readPointer(VISUAL_TREATMENT_POINTER, "visual treatment");
+		long[] attributes = new long[VISUAL_LOOK_POINTER_OFFSETS.length];
+		for (int index = 0; index < VISUAL_LOOK_POINTER_OFFSETS.length; index++)
+		{
+			attributes[index] = readPointer(treatment + VISUAL_LOOK_POINTER_OFFSETS[index], "visual look");
+		}
+		return attributes;
+	}
+
+	private boolean yellowFilterHidden(long[] attributes)
+	{
+		byte[] neutral = encodeTint(NEUTRAL_TINT);
+		for (long attribute : attributes)
+		{
+			if (!Arrays.equals(read(attribute + VISUAL_LOOK_TINT_OFFSET, neutral.length), neutral))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private void setYellowFilterHidden(boolean hidden)
+	{
+		long[] attributes = visualLookAttributes();
+		if (hidden)
+		{
+			hideYellowFilter(attributes);
+		}
+		else
+		{
+			restoreYellowFilter(attributes);
+		}
+	}
+
+	private void hideYellowFilter(long[] attributes)
+	{
+		if (yellowFilterHidden(attributes))
+		{
+			return;
+		}
+		List<TintBackup> backups = new ArrayList<>();
+		for (long attribute : attributes)
+		{
+			byte[] value = read(attribute + VISUAL_LOOK_TINT_OFFSET, 12);
+			requireValidTint(value);
+			backups.add(new TintBackup(attribute, value));
+		}
+		byte[] neutral = encodeTint(NEUTRAL_TINT);
+		try
+		{
+			for (long attribute : attributes)
+			{
+				write(attribute + VISUAL_LOOK_TINT_OFFSET, neutral);
+			}
+			verifyTints(attributes, List.of(NEUTRAL_TINT, NEUTRAL_TINT, NEUTRAL_TINT));
+			tintBackups = List.copyOf(backups);
+		}
+		catch (RuntimeException failure)
+		{
+			for (TintBackup backup : backups)
+			{
+				write(backup.address() + VISUAL_LOOK_TINT_OFFSET, backup.value());
+			}
+			throw failure;
+		}
+	}
+
+	private void restoreYellowFilter(long[] attributes)
+	{
+		List<TintBackup> backups = matchingBackups(attributes);
+		if (!backups.isEmpty())
+		{
+			for (TintBackup backup : backups)
+			{
+				write(backup.address() + VISUAL_LOOK_TINT_OFFSET, backup.value());
+			}
+			for (TintBackup backup : backups)
+			{
+				if (!Arrays.equals(read(backup.address() + VISUAL_LOOK_TINT_OFFSET, backup.value().length), backup.value()))
+				{
+					throw new IllegalStateException("The game did not restore the yellow filter");
+				}
+			}
+		}
+		else
+		{
+			for (int index = 0; index < attributes.length; index++)
+			{
+				write(attributes[index] + VISUAL_LOOK_TINT_OFFSET, encodeTint(STOCK_TINTS.get(index)));
+			}
+			verifyTints(attributes, STOCK_TINTS);
+		}
+		tintBackups = List.of();
+	}
+
+	private List<TintBackup> matchingBackups(long[] attributes)
+	{
+		if (tintBackups.size() != attributes.length)
+		{
+			return List.of();
+		}
+		for (int index = 0; index < attributes.length; index++)
+		{
+			if (tintBackups.get(index).address() != attributes[index])
+			{
+				return List.of();
+			}
+		}
+		return tintBackups;
+	}
+
+	private void verifyTints(long[] attributes, List<Tint> expected)
+	{
+		for (int index = 0; index < attributes.length; index++)
+		{
+			byte[] value = encodeTint(expected.get(index));
+			if (!Arrays.equals(read(attributes[index] + VISUAL_LOOK_TINT_OFFSET, value.length), value))
+			{
+				throw new IllegalStateException("The game did not retain the yellow filter setting");
+			}
+		}
+	}
+
+	private void requireValidTint(byte[] value)
+	{
+		ByteBuffer buffer = ByteBuffer.wrap(value).order(ByteOrder.BIG_ENDIAN);
+		while (buffer.hasRemaining())
+		{
+			float component = buffer.getFloat();
+			if (!Float.isFinite(component) || component < -4.0F || component > 4.0F)
+			{
+				throw new IllegalStateException("The current visual treatment is not valid");
+			}
+		}
+	}
+
+	private static byte[] encodeTint(Tint tint)
+	{
+		return ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
+			.putFloat(tint.red()).putFloat(tint.green()).putFloat(tint.blue()).array();
+	}
+
 	private long readPointer(long address, String label)
 	{
 		return requirePointer(Integer.toUnsignedLong(readIntBig(address)), label);
@@ -314,5 +471,13 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 			throw new IllegalStateException("The " + label + " is not available in the current game state");
 		}
 		return pointer;
+	}
+
+	private record Tint(float red, float green, float blue)
+	{
+	}
+
+	private record TintBackup(long address, byte[] value)
+	{
 	}
 }
