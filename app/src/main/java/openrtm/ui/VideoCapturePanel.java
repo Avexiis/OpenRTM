@@ -38,6 +38,7 @@ import java.awt.event.FocusEvent;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -73,6 +74,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 	private final JCheckBox monitorAudio = new JCheckBox("Monitor audio");
 	private final JCheckBox detachedViewer = new JCheckBox("Detached viewer");
 	private final JCheckBox lockViewerSize = new JCheckBox("Lock viewer size");
+	private final JCheckBox copyRecording = new JCheckBox("Copy recording to clipboard");
 	private final JTextField captureDirectory = new JTextField(38);
 	private final JButton record = new JButton("Record");
 	private final JButton screenshot = new JButton("Screenshot");
@@ -90,6 +92,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 	private volatile boolean captureRequested;
 	private boolean recordActionPending;
 	private boolean screenshotActionPending;
+	private volatile boolean recordingFailed;
 	private boolean shuttingDown;
 	private boolean loading = true;
 	private String overlayMessage = "No input source detected";
@@ -183,10 +186,9 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 			recordActionPending = false;
 			record.setEnabled(captureRequested && capture.latestImage() != null);
 			record.setText(active ? "Stop recording" : "Record");
-			if (!active)
+			if (!active && !recordingFailed)
 			{
-				status.setText("Recording saved to " + destination.getFileName());
-				status.setForeground(OK);
+				recordingFinished(destination);
 			}
 		});
 	}
@@ -194,6 +196,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 	@Override
 	public void onRecordingFailure(String message)
 	{
+		recordingFailed = true;
 		tasks.submit(() ->
 		{
 			capture.stopRecording();
@@ -453,6 +456,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 		JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 8));
 		actions.add(record);
 		actions.add(screenshot);
+		actions.add(copyRecording);
 		record.setBackground(RECORDING);
 		record.setForeground(Color.WHITE);
 		record.setOpaque(true);
@@ -480,6 +484,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 		monitorAudio.setSelected(settings.monitorAudio());
 		detachedViewer.setSelected(settings.detachedViewer());
 		lockViewerSize.setSelected(settings.lockViewerSize());
+		copyRecording.setSelected(settings.copyRecordingToClipboard());
 		captureDirectory.setText(settings.captureDirectory().toString());
 	}
 
@@ -571,6 +576,8 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 				viewer.locked(lockViewerSize.isSelected());
 			}
 		});
+		copyRecording.addActionListener(e ->
+			settings.copyRecordingToClipboard(copyRecording.isSelected()));
 		captureDirectory.addActionListener(e -> saveCaptureDirectory());
 		captureDirectory.addFocusListener(new FocusAdapter()
 		{
@@ -677,6 +684,7 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 			return;
 		}
 		Path destination = capturePath("OpenRTM_", ".mp4");
+		recordingFailed = false;
 		tasks.submit(() ->
 		{
 			try
@@ -693,6 +701,27 @@ public final class VideoCapturePanel extends JPanel implements VideoCaptureServi
 				});
 			}
 		});
+	}
+
+	private void recordingFinished(Path destination)
+	{
+		if (!copyRecording.isSelected())
+		{
+			status.setText("Recording saved to " + destination.getFileName());
+			status.setForeground(OK);
+			return;
+		}
+		try
+		{
+			ConsoleClipboard.copy(destination);
+			status.setText("Recording saved and copied to clipboard");
+			status.setForeground(OK);
+		}
+		catch (IOException | IllegalStateException failure)
+		{
+			status.setText("Recording saved, but the clipboard is unavailable");
+			status.setForeground(WARN);
+		}
 	}
 
 	private void saveScreenshot()

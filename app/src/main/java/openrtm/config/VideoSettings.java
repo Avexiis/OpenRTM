@@ -107,6 +107,16 @@ public final class VideoSettings
 		config.put("video.lockViewerSize", value);
 	}
 
+	public boolean copyRecordingToClipboard()
+	{
+		return config.bool("video.copyRecordingToClipboard", false);
+	}
+
+	public void copyRecordingToClipboard(boolean value)
+	{
+		config.put("video.copyRecordingToClipboard", value);
+	}
+
 	public Path captureDirectory()
 	{
 		Path defaultDirectory = Path.of(System.getProperty("user.home"), "Videos", "OpenRTM");

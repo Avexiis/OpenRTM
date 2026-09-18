@@ -9,7 +9,11 @@ import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 
 final class ConsoleClipboard
 {
@@ -27,6 +31,16 @@ final class ConsoleClipboard
 			throw new IOException("PNG encoding is unavailable");
 		}
 		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new ImageSelection(image, output.toByteArray()), null);
+	}
+
+	static void copy(Path path) throws IOException
+	{
+		Path file = path.toAbsolutePath().normalize();
+		if (!Files.isRegularFile(file))
+		{
+			throw new IOException("The recording is unavailable");
+		}
+		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new FileSelection(file.toFile()), null);
 	}
 
 	private static final class ImageSelection implements Transferable
@@ -63,6 +77,39 @@ final class ConsoleClipboard
 			if (PNG.equals(flavor))
 			{
 				return new ByteArrayInputStream(png);
+			}
+			throw new UnsupportedFlavorException(flavor);
+		}
+	}
+
+	private static final class FileSelection implements Transferable
+	{
+		private static final DataFlavor[] FLAVORS = {DataFlavor.javaFileListFlavor};
+		private final List<File> files;
+
+		private FileSelection(File file)
+		{
+			files = List.of(file);
+		}
+
+		@Override
+		public DataFlavor[] getTransferDataFlavors()
+		{
+			return FLAVORS.clone();
+		}
+
+		@Override
+		public boolean isDataFlavorSupported(DataFlavor flavor)
+		{
+			return DataFlavor.javaFileListFlavor.equals(flavor);
+		}
+
+		@Override
+		public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException
+		{
+			if (DataFlavor.javaFileListFlavor.equals(flavor))
+			{
+				return files;
 			}
 			throw new UnsupportedFlavorException(flavor);
 		}
