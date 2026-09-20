@@ -2,7 +2,8 @@ package openrtm.games;
 
 public enum OtherGame
 {
-	NFSMW("NFS:MW", "Need for Speed: Most Wanted", "454107D9");
+	NFSMW("NFS:MW", "Need for Speed: Most Wanted", "454107D9"),
+	NFS_CARBON("NFS Carbon", "Need for Speed: Carbon", "454107EC");
 
 	private final String tabName;
 	private final String displayName;

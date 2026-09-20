@@ -12,6 +12,6 @@ public final class OtherGameAdapters
 
 	public static List<OtherGameAdapter> create(ConsoleService console)
 	{
-		return List.of(new NfsmwAdapter(console));
+		return List.of(new NfsmwAdapter(console), new NfsCarbonAdapter(console));
 	}
 }
