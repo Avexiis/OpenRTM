@@ -21,6 +21,7 @@ final class NfsCarbonAdapter extends AbstractOtherGameAdapter
 	private static final long INFINITE_SPEEDBREAKER = 0x82C6541DL;
 	private static final long NITROUS_DRAIN_STORE = 0x824C2C88L;
 	private static final long NITROUS_DRAIN_CLAMP_STORE = 0x824C2CBCL;
+	private static final long RACECAR_DRIVE_SPEED_SLOT = 0x8206794CL;
 	private static final long PLAYER_MANAGER_SLOT_POINTER = 0x830079C8L;
 	private static final long PLAYER_MANAGER_READY = 0x830079D0L;
 	private static final long PLAYER_VTABLE = 0x8209E870L;
@@ -34,6 +35,8 @@ final class NfsCarbonAdapter extends AbstractOtherGameAdapter
 	private static final long MAXIMUM_VALUE = 2_000_000_000L;
 	private static final long MAXIMUM_ADJUSTMENT = MAXIMUM_VALUE;
 	private static final int NITROUS_DRAIN_INSTRUCTION = 0xD1BF00FC;
+	private static final int RACECAR_DRIVE_SPEED_SETTER = 0x8211AFA0;
+	private static final int RACECAR_ZERO_DRIVE_SPEED_SETTER = 0x822823C0;
 	private static final int NOP_INSTRUCTION = 0x60000000;
 	private static final List<Section> SECTIONS = List.of(
 		new Section("career", "Career"),
@@ -48,7 +51,8 @@ final class NfsCarbonAdapter extends AbstractOtherGameAdapter
 		new Toggle("cops", "Cops", "Enabled", "pursuit", true, false),
 		new Toggle("skip_intro", "Career Intro", "Skip New Career Intro", "career", false, true),
 		new Toggle("infinite_speedbreaker", "Infinite Speedbreaker", "Enabled", "driving", false, true),
-		new Toggle("infinite_nitrous", "Infinite Nitrous", "Enabled", "driving", false, true));
+		new Toggle("infinite_nitrous", "Infinite Nitrous", "Enabled", "driving", false, true),
+		new Toggle("freeze_opponents", "Freeze Opponents", "Enabled", "driving", false, true));
 	private static final List<Action> ACTIONS = List.of(
 		new Action("start_pursuit", "Start Pursuit", "pursuit"),
 		new Action("prevent_bust", "Prevent Bust", "pursuit"));
@@ -143,6 +147,7 @@ final class NfsCarbonAdapter extends AbstractOtherGameAdapter
 			case "skip_intro" -> readToggleByte(INTRO_SKIP, "career intro") != 0;
 			case "infinite_speedbreaker" -> readToggleByte(INFINITE_SPEEDBREAKER, "Speedbreaker") != 0;
 			case "infinite_nitrous" -> nitrousInfinite();
+			case "freeze_opponents" -> opponentsFrozen();
 			default -> throw unknown(key);
 		};
 	}
@@ -160,6 +165,7 @@ final class NfsCarbonAdapter extends AbstractOtherGameAdapter
 			case "infinite_speedbreaker" ->
 				writeToggleByte(INFINITE_SPEEDBREAKER, enabled ? 1 : 0, "Speedbreaker");
 			case "infinite_nitrous" -> setNitrousInfinite(enabled);
+			case "freeze_opponents" -> setOpponentsFrozen(enabled);
 			default -> throw unknown(key);
 		}
 	}
@@ -321,9 +327,59 @@ final class NfsCarbonAdapter extends AbstractOtherGameAdapter
 		}
 	}
 
+	private boolean opponentsFrozen()
+	{
+		int setter = readIntBig(RACECAR_DRIVE_SPEED_SLOT);
+		if (setter == RACECAR_ZERO_DRIVE_SPEED_SETTER)
+		{
+			return true;
+		}
+		if (setter == RACECAR_DRIVE_SPEED_SETTER)
+		{
+			return false;
+		}
+		throw new IllegalStateException("The opponent racecar code did not pass its game-state check");
+	}
+
+	private void setOpponentsFrozen(boolean enabled)
+	{
+		boolean previous = opponentsFrozen();
+		if (previous == enabled)
+		{
+			return;
+		}
+		int setter = enabled ? RACECAR_ZERO_DRIVE_SPEED_SETTER : RACECAR_DRIVE_SPEED_SETTER;
+		try
+		{
+			writeIntBig(RACECAR_DRIVE_SPEED_SLOT, setter);
+			if (opponentsFrozen() != enabled)
+			{
+				throw new IllegalStateException("The game did not retain the opponent freeze setting");
+			}
+		}
+		catch (RuntimeException failure)
+		{
+			try
+			{
+				writeIntBig(RACECAR_DRIVE_SPEED_SLOT,
+					previous ? RACECAR_ZERO_DRIVE_SPEED_SETTER : RACECAR_DRIVE_SPEED_SETTER);
+			}
+			catch (RuntimeException rollbackFailure)
+			{
+				failure.addSuppressed(rollbackFailure);
+			}
+			throw failure;
+		}
+	}
+
 	private void writeInstruction(long address, int instruction)
 	{
-		write(address, ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(instruction).array());
+		writeIntBig(address, instruction);
+	}
+
+	private void writeIntBig(long address, int value)
+	{
+		write(address, ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(value).array());
 	}
 
 	private long readPointer(long address, String label)
