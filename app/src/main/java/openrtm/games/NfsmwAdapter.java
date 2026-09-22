@@ -26,6 +26,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	private static final long INFINITE_NITROUS = 0x82A2CE71L;
 	private static final long INFINITE_SPEEDBREAKER = 0x82A2D1C6L;
 	private static final long VISUAL_TREATMENT_POINTER = 0x82A2C4D4L;
+	private static final long RACECAR_DRIVE_SPEED_SLOT = 0x82065718L;
 	private static final long PLAYER_MANAGER_SLOT_POINTER = 0x82C74BD4L;
 	private static final long PLAYER_MANAGER_READY = 0x82C74BDCL;
 	private static final long PLAYER_VTABLE = 0x82092948L;
@@ -39,6 +40,8 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	private static final long MAXIMUM_POINTER = 0xD0000000L;
 	private static final long MAXIMUM_VALUE = 2_000_000_000L;
 	private static final long MAXIMUM_ADJUSTMENT = MAXIMUM_VALUE;
+	private static final int RACECAR_DRIVE_SPEED_SETTER = 0x820E8F90;
+	private static final int RACECAR_ZERO_DRIVE_SPEED_SETTER = 0x823B91F8;
 	private static final Tint NEUTRAL_TINT = new Tint(1.0F, 1.0F, 1.0F);
 	private static final List<Tint> STOCK_TINTS = List.of(
 		new Tint(0.85F, 0.75F, 0.25F),
@@ -62,6 +65,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 		new Toggle("skip_intro", "Career Intro", "Skip New Career Intro", "career", false, true),
 		new Toggle("infinite_speedbreaker", "Infinite Speedbreaker", "Enabled", "driving", false, true),
 		new Toggle("infinite_nitrous", "Infinite Nitrous", "Enabled", "driving", false, true),
+		new Toggle("freeze_opponents", "Freeze Opponents", "Enabled", "driving", false, true),
 		new Toggle("hide_yellow_filter", "Yellow Filter", "Hidden", "visual", false, true));
 	private static final List<Action> ACTIONS = List.of(
 		new Action("start_pursuit", "Start Pursuit", "pursuit"),
@@ -184,6 +188,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 			case "skip_intro" -> readToggleByte(INTRO_SKIP, "career intro") != 0;
 			case "infinite_speedbreaker" -> readToggleByte(INFINITE_SPEEDBREAKER, "Speedbreaker") != 0;
 			case "infinite_nitrous" -> readToggleByte(INFINITE_NITROUS, "nitrous") != 0;
+			case "freeze_opponents" -> opponentsFrozen();
 			case "hide_yellow_filter" -> yellowFilterHidden(visualLookAttributes());
 			default -> throw unknown(key);
 		};
@@ -202,6 +207,7 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 			case "infinite_speedbreaker" ->
 				writeToggleByte(INFINITE_SPEEDBREAKER, enabled ? 1 : 0, "Speedbreaker");
 			case "infinite_nitrous" -> writeToggleByte(INFINITE_NITROUS, enabled ? 1 : 0, "nitrous");
+			case "freeze_opponents" -> setOpponentsFrozen(enabled);
 			case "hide_yellow_filter" -> setYellowFilterHidden(enabled);
 			default -> throw unknown(key);
 		}
@@ -292,6 +298,51 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 			throw new IllegalStateException("The current player object did not pass its game-state check");
 		}
 		return current;
+	}
+
+	private boolean opponentsFrozen()
+	{
+		int setter = readIntBig(RACECAR_DRIVE_SPEED_SLOT);
+		if (setter == RACECAR_ZERO_DRIVE_SPEED_SETTER)
+		{
+			return true;
+		}
+		if (setter == RACECAR_DRIVE_SPEED_SETTER)
+		{
+			return false;
+		}
+		throw new IllegalStateException("The opponent racecar code did not pass its game-state check");
+	}
+
+	private void setOpponentsFrozen(boolean enabled)
+	{
+		boolean previous = opponentsFrozen();
+		if (previous == enabled)
+		{
+			return;
+		}
+		int setter = enabled ? RACECAR_ZERO_DRIVE_SPEED_SETTER : RACECAR_DRIVE_SPEED_SETTER;
+		try
+		{
+			writeIntBig(RACECAR_DRIVE_SPEED_SLOT, setter);
+			if (opponentsFrozen() != enabled)
+			{
+				throw new IllegalStateException("The game did not retain the opponent freeze setting");
+			}
+		}
+		catch (RuntimeException failure)
+		{
+			try
+			{
+				writeIntBig(RACECAR_DRIVE_SPEED_SLOT,
+					previous ? RACECAR_ZERO_DRIVE_SPEED_SETTER : RACECAR_DRIVE_SPEED_SETTER);
+			}
+			catch (RuntimeException rollbackFailure)
+			{
+				failure.addSuppressed(rollbackFailure);
+			}
+			throw failure;
+		}
 	}
 
 	private long[] visualLookAttributes()
@@ -437,6 +488,11 @@ final class NfsmwAdapter extends AbstractOtherGameAdapter
 	{
 		return ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
 			.putFloat(tint.red()).putFloat(tint.green()).putFloat(tint.blue()).array();
+	}
+
+	private void writeIntBig(long address, int value)
+	{
+		write(address, ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(value).array());
 	}
 
 	private long readPointer(long address, String label)
