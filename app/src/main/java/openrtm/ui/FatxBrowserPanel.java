@@ -12,12 +12,15 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTree;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.ToolTipManager;
 import javax.swing.UIManager;
+import javax.swing.event.PopupMenuEvent;
+import javax.swing.event.PopupMenuListener;
 import javax.swing.event.TreeExpansionEvent;
 import javax.swing.event.TreeWillExpandListener;
 import javax.swing.tree.DefaultMutableTreeNode;
@@ -39,21 +42,25 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public final class FatxBrowserPanel extends FileDropPanel
 {
 	private static final Color LINE = new Color(55, 60, 66);
 	private final TaskRunner tasks;
 	private final ProfileIdentityResolver identities;
-	private final JTextField source = new JTextField(38);
-	private final JComboBox<Path> detected = new JComboBox<>();
+	private final JTextField source = new JTextField(24);
+	private final JComboBox<FatxDevice.DetectedDevice> detected = new JComboBox<>();
 	private final JComboBox<FatxDevice.Partition> partitions = new JComboBox<>();
 	private final DefaultMutableTreeNode root = new DefaultMutableTreeNode(StorageNode.placeholder("No storage opened"));
 	private final DefaultTreeModel model = new DefaultTreeModel(root);
 	private final JTree tree = new JTree(model);
 	private final JLabel selectedPath = new JLabel(" ");
+	private final JLabel extractStatus = new JLabel(" ");
+	private final JProgressBar extractProgress = new JProgressBar(0, 100);
 	private FatxDevice device;
 
 	public FatxBrowserPanel(TaskRunner tasks, ProfileIdentityResolver identities)
@@ -65,7 +72,13 @@ public final class FatxBrowserPanel extends FileDropPanel
 		configureTree();
 		add(toolbar(), BorderLayout.NORTH);
 		add(new JScrollPane(tree), BorderLayout.CENTER);
-		add(selectedPath, BorderLayout.SOUTH);
+		extractProgress.setStringPainted(true);
+		extractProgress.setVisible(false);
+		JPanel footer = new JPanel(new BorderLayout(8, 0));
+		footer.add(selectedPath, BorderLayout.WEST);
+		footer.add(extractStatus, BorderLayout.CENTER);
+		footer.add(extractProgress, BorderLayout.EAST);
+		add(footer, BorderLayout.SOUTH);
 		refreshDetected();
 		enableFileDrop("Drop files here to use!", this::dropFiles);
 	}
@@ -84,14 +97,33 @@ public final class FatxBrowserPanel extends FileDropPanel
 		open.add(browse);
 		open.add(openButton);
 		open.add(new JLabel("Detected device"));
-		detected.setPrototypeDisplayValue(Path.of("/dev/device-name"));
+		detected.setPrototypeDisplayValue(new FatxDevice.DetectedDevice(
+			Path.of("\\\\.\\PhysicalDrive10"), "500GB HDD Xbox"));
+		detected.addPopupMenuListener(new PopupMenuListener()
+		{
+			@Override
+			public void popupMenuWillBecomeVisible(PopupMenuEvent event)
+			{
+				refreshDetected();
+			}
+
+			@Override
+			public void popupMenuWillBecomeInvisible(PopupMenuEvent event)
+			{
+			}
+
+			@Override
+			public void popupMenuCanceled(PopupMenuEvent event)
+			{
+			}
+		});
 		open.add(detected);
 		JButton useDetected = new JButton("Use Device");
 		useDetected.addActionListener(event -> {
-			Path selected = (Path) detected.getSelectedItem();
+			FatxDevice.DetectedDevice selected = (FatxDevice.DetectedDevice) detected.getSelectedItem();
 			if (selected != null)
 			{
-				source.setText(selected.toString());
+				source.setText(selected.path().toString());
 				openSource();
 			}
 		});
@@ -301,19 +333,125 @@ public final class FatxBrowserPanel extends FileDropPanel
 
 	private void extractSelected()
 	{
-		StorageNode value = selectedNode();
-		if (value == null || value.entry == null || value.entry.directory())
+		List<FatxDevice.Entry> entries = selectedEntries();
+		if (entries.isEmpty())
 		{
-			showWarning("Select a file to extract");
+			showWarning("Select one or more files or folders to extract");
 			return;
 		}
-		JFileChooser chooser = new JFileChooser();
-		chooser.setSelectedFile(Path.of(value.entry.name()).toFile());
-		if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION)
+		if (entries.size() == 1 && !entries.get(0).directory())
 		{
-			tasks.run("extract Xbox storage file",
-				() -> device.extract(value.entry, chooser.getSelectedFile().toPath()));
+			FatxDevice.Entry file = entries.get(0);
+			JFileChooser chooser = new JFileChooser();
+			chooser.setSelectedFile(Path.of(file.name()).toFile());
+			if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION)
+			{
+				extractWithProgress(List.of(file), List.of(chooser.getSelectedFile().toPath()));
+			}
+			return;
 		}
+		JFileChooser folderChooser = new JFileChooser();
+		folderChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+		folderChooser.setDialogTitle(entries.size() == 1
+			? "Choose where to extract the folder" : "Choose where to extract the selected items");
+		if (folderChooser.showDialog(this, "Extract Here") == JFileChooser.APPROVE_OPTION)
+		{
+			Path base = folderChooser.getSelectedFile().toPath();
+			Set<String> used = new HashSet<>();
+			List<Path> targets = new ArrayList<>();
+			for (FatxDevice.Entry entry : entries)
+			{
+				targets.add(base.resolve(uniqueName(entry.name(), used)));
+			}
+			extractWithProgress(entries, targets);
+		}
+	}
+
+	private void extractWithProgress(List<FatxDevice.Entry> entries, List<Path> targets)
+	{
+		SwingUtilities.invokeLater(() -> {
+			extractProgress.setIndeterminate(true);
+			extractProgress.setString("");
+			extractProgress.setVisible(true);
+			extractStatus.setText("Scanning selected items");
+		});
+		tasks.run("extract Xbox storage items", () -> {
+			try
+			{
+				device.extractItems(entries, targets, (completed, total, number, count, name) ->
+					SwingUtilities.invokeLater(() -> showExtractProgress(completed, total, number, count, name)));
+			}
+			finally
+			{
+				SwingUtilities.invokeLater(() -> {
+					extractProgress.setIndeterminate(false);
+					extractProgress.setVisible(false);
+					extractStatus.setText(" ");
+				});
+			}
+		});
+	}
+
+	private void showExtractProgress(long completed, long total, int number, int count, String name)
+	{
+		if (total < 0)
+		{
+			extractProgress.setIndeterminate(true);
+			return;
+		}
+		int percent = total == 0 ? 100 : (int) Math.min(100, Math.round(completed * 100.0 / total));
+		extractProgress.setIndeterminate(false);
+		extractProgress.setValue(percent);
+		extractProgress.setString(percent + "%");
+		extractStatus.setText(count == 0 ? "No files to extract"
+			: name.isEmpty() ? "Extracted " + count + " files"
+			: "Extracting " + number + " of " + count + ": " + name);
+	}
+
+	private List<FatxDevice.Entry> selectedEntries()
+	{
+		List<FatxDevice.Entry> all = new ArrayList<>();
+		TreePath[] paths = tree.getSelectionPaths();
+		if (paths != null)
+		{
+			for (TreePath path : paths)
+			{
+				StorageNode value = storageNode((DefaultMutableTreeNode) path.getLastPathComponent());
+				if (value != null && value.entry != null)
+				{
+					all.add(value.entry);
+				}
+			}
+		}
+		List<FatxDevice.Entry> result = new ArrayList<>();
+		for (FatxDevice.Entry entry : all)
+		{
+			boolean covered = all.stream().anyMatch(other -> other != entry && other.directory()
+				&& other.partition() == entry.partition() && isInside(entry.path(), other.path()));
+			if (!covered)
+			{
+				result.add(entry);
+			}
+		}
+		return result;
+	}
+
+	private static boolean isInside(String path, String folder)
+	{
+		String prefix = folder.equals("/") ? "/" : folder + "/";
+		return !path.equals(folder) && path.startsWith(prefix);
+	}
+
+	private static String uniqueName(String name, Set<String> used)
+	{
+		String clean = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+		String candidate = clean;
+		int number = 2;
+		while (!used.add(candidate.toLowerCase(Locale.ROOT)))
+		{
+			candidate = clean + " (" + number++ + ")";
+		}
+		return candidate;
 	}
 
 	private void importSelected()
@@ -457,10 +595,15 @@ public final class FatxBrowserPanel extends FileDropPanel
 
 	private void refreshDetected()
 	{
+		FatxDevice.DetectedDevice previous = (FatxDevice.DetectedDevice) detected.getSelectedItem();
 		detected.removeAllItems();
-		for (Path path : FatxDevice.discover())
+		for (FatxDevice.DetectedDevice device : FatxDevice.discover())
 		{
-			detected.addItem(path);
+			detected.addItem(device);
+			if (previous != null && previous.path().equals(device.path()))
+			{
+				detected.setSelectedItem(device);
+			}
 		}
 	}
 

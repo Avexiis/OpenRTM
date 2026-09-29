@@ -252,9 +252,9 @@ Xbox Storage opens Xbox 360 FATX storage independently of the networked File Tra
 * Storage image files
 * Folders containing split Xbox 360 `Data` files, including an `Xbox360` subfolder
 
-On Linux, readable storage devices may appear automatically under **Detected device**. A source can also be entered or selected manually. Open the source, choose a detected partition, and expand folders to browse it.
+On Linux, readable storage devices may appear automatically under **Detected device**. On Windows, run OpenRTM as administrator and Xbox 360 storage devices that are not opened by another program appear under **Detected device**. You can also enter a device such as `\\.\PhysicalDrive1` as the source, using the disk number shown in Disk Management. A source can also be entered or selected manually. Open the source, choose a detected partition, and expand folders to browse it.
 
-The page can extract a selected file, import a computer file, create a folder, and recursively delete a selected file or folder. You can also drop one or more computer files onto the page to import them into the selected FATX folder. Same-name imports replace the existing file after confirmation. Individual FATX files must be smaller than 4 GB.
+The page can extract selected files and folders, including all folder contents (hold Ctrl or Shift to select several at once), import a computer file, create a folder, and recursively delete a selected file or folder. You can also drop one or more computer files onto the page to import them into the selected FATX folder. Same-name imports replace the existing file after confirmation. Individual FATX files must be smaller than 4 GB.
 
 Content folders use the same friendly gamertag, title, and content type names as File Transfer. Use the **ID** button to view an actual folder ID.
 

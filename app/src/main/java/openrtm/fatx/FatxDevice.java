@@ -3,6 +3,8 @@ package openrtm.fatx;
 import java.io.Closeable;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
@@ -19,6 +21,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongConsumer;
 import java.util.stream.Stream;
 
 public final class FatxDevice implements Closeable
@@ -26,10 +35,13 @@ public final class FatxDevice implements Closeable
 	private static final int MAGIC = 0x58544146;
 	private static final int ENTRY_SIZE = 0x40;
 	private static final int NAME_SIZE = 0x2A;
+	private static final int MAX_RUN = 4 * 1024 * 1024;
 	private static final long USB_DATA = 0x20000000L;
 	private static final long HDD_DATA = 0x130EB0000L;
+	private static final int WORKERS = 1;
 	private final Backing backing;
 	private final List<Partition> partitions;
+	private ExecutorService workers;
 
 	private FatxDevice(Backing backing) throws IOException
 	{
@@ -66,27 +78,147 @@ public final class FatxDevice implements Closeable
 			}
 			return new FatxDevice(new SplitBacking(segments));
 		}
+		if (isWindowsDevice(source.toString()))
+		{
+			return openDevice(source.toString(), false);
+		}
 		return new FatxDevice(new FileBacking(path));
 	}
 
-	public static List<Path> discover()
+	static FatxDevice openDevice(String name, boolean readOnly) throws IOException
 	{
-		List<Path> found = new ArrayList<>();
+		return new FatxDevice(DeviceBacking.open(name, readOnly));
+	}
+
+	private static boolean isWindowsDevice(String name)
+	{
+		return name.startsWith("\\\\.\\") && name.length() > 4;
+	}
+
+	public static List<DetectedDevice> discover()
+	{
+		List<DetectedDevice> found = new ArrayList<>();
+		if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows"))
+		{
+			for (int index = 0; index < 32; index++)
+			{
+				String name = "\\\\.\\PhysicalDrive" + index;
+				try (FatxDevice device = openDevice(name, true))
+				{
+					found.add(new DetectedDevice(Path.of(name), device.deviceName()));
+				}
+				catch (IOException | RuntimeException ignored)
+				{
+				}
+			}
+			return Collections.unmodifiableList(found);
+		}
 		Path devices = Path.of("/dev");
 		if (Files.isDirectory(devices))
 		{
 			try (Stream<Path> entries = Files.list(devices))
 			{
+				List<Path> paths = new ArrayList<>();
 				entries.filter(path -> path.getFileName().toString().matches("(?:sd[a-z]|nvme\\d+n\\d+|mmcblk\\d+)"))
 					.filter(Files::isReadable)
 					.sorted()
-					.forEach(found::add);
+					.forEach(paths::add);
+				for (Path path : paths)
+				{
+					String name = null;
+					try (FatxDevice device = open(path))
+					{
+						name = device.deviceName();
+					}
+					catch (IOException | RuntimeException ignored)
+					{
+					}
+					found.add(new DetectedDevice(path, name));
+				}
 			}
 			catch (IOException ignored)
 			{
 			}
 		}
 		return Collections.unmodifiableList(found);
+	}
+
+	public String deviceName()
+	{
+		for (Partition partition : partitions)
+		{
+			if (!partition.name.equals("Content"))
+			{
+				continue;
+			}
+			try
+			{
+				for (Entry entry : list(partition.root))
+				{
+					if (!entry.directory && entry.name.equalsIgnoreCase("name.txt")
+						&& entry.size > 0 && entry.size <= 256)
+					{
+						List<Long> chain = clusterChain(partition, entry.startingCluster);
+						if (chain.isEmpty())
+						{
+							return null;
+						}
+						byte[] data = backing.read(clusterOffset(partition, chain.get(0)), (int) entry.size);
+						String name = decodeName(data).replace("\0", "").trim();
+						return name.isEmpty() ? null : name;
+					}
+				}
+			}
+			catch (IOException | RuntimeException ignored)
+			{
+			}
+		}
+		return null;
+	}
+
+	private static String decodeName(byte[] data)
+	{
+		if (data.length >= 2 && (data[0] & 0xFF) == 0xFE && (data[1] & 0xFF) == 0xFF)
+		{
+			return new String(data, 2, data.length - 2, StandardCharsets.UTF_16BE);
+		}
+		if (data.length >= 2 && (data[0] & 0xFF) == 0xFF && (data[1] & 0xFF) == 0xFE)
+		{
+			return new String(data, 2, data.length - 2, StandardCharsets.UTF_16LE);
+		}
+		if (data.length >= 2 && data[0] == 0)
+		{
+			return new String(data, StandardCharsets.UTF_16BE);
+		}
+		return new String(data, StandardCharsets.UTF_8);
+	}
+
+	public static final class DetectedDevice
+	{
+		private final Path path;
+		private final String name;
+
+		public DetectedDevice(Path path, String name)
+		{
+			this.path = path;
+			this.name = name;
+		}
+
+		public Path path()
+		{
+			return path;
+		}
+
+		@Override
+		public String toString()
+		{
+			String label = path.toString();
+			if (label.endsWith("\\"))
+			{
+				label = label.substring(0, label.length() - 1);
+			}
+			return name == null ? label : label + "  -  " + name;
+		}
 	}
 
 	public List<Partition> partitions()
@@ -143,6 +275,12 @@ public final class FatxDevice implements Closeable
 
 	public void extract(Entry file, Path destination) throws IOException
 	{
+		extract(file, destination, written -> {
+		});
+	}
+
+	private void extract(Entry file, Path destination, LongConsumer written) throws IOException
+	{
 		if (file == null || file.directory())
 		{
 			throw new IOException("Select a file to extract");
@@ -158,27 +296,142 @@ public final class FatxDevice implements Closeable
 		{
 			long remaining = file.size;
 			long position = 0;
-			for (long cluster : clusterChain(file.partition, file.startingCluster))
+			List<Long> chain = clusterChain(file.partition, file.startingCluster);
+			int index = 0;
+			while (index < chain.size() && remaining > 0)
 			{
-				int length = (int) Math.min(file.partition.clusterSize, remaining);
-				byte[] data = backing.read(clusterOffset(file.partition, cluster), length);
+				int run = 1;
+				while (index + run < chain.size() && chain.get(index + run) == chain.get(index) + run
+					&& (long) (run + 1) * file.partition.clusterSize <= MAX_RUN)
+				{
+					run++;
+				}
+				int length = (int) Math.min((long) run * file.partition.clusterSize, remaining);
+				byte[] data = backing.read(clusterOffset(file.partition, chain.get(index)), length);
 				ByteBuffer buffer = ByteBuffer.wrap(data);
 				while (buffer.hasRemaining())
 				{
 					position += target.write(buffer, position);
 				}
 				remaining -= length;
-				if (remaining == 0)
-				{
-					break;
-				}
+				index += run;
+				written.accept(length);
 			}
 			if (remaining != 0)
 			{
 				throw new EOFException("FATX file cluster chain ended early");
 			}
-			target.force(true);
 		}
+	}
+
+	public void extractDirectory(Entry directory, Path destination) throws IOException
+	{
+		if (directory == null || !directory.directory())
+		{
+			throw new IOException("Select a folder to extract");
+		}
+		extractItems(List.of(directory), List.of(destination), (completed, total, number, count, name) -> {
+		});
+	}
+
+	public void extractItems(List<Entry> entries, List<Path> destinations, Progress progress) throws IOException
+	{
+		List<Entry> files = new ArrayList<>();
+		List<Path> targets = new ArrayList<>();
+		long total = 0;
+		progress.update(0, -1, 0, 0, "");
+		for (int index = 0; index < entries.size(); index++)
+		{
+			total += collect(entries.get(index), destinations.get(index).toAbsolutePath().normalize(),
+				files, targets, 0);
+		}
+		long finalTotal = total;
+		AtomicLong completed = new AtomicLong();
+		AtomicInteger started = new AtomicInteger();
+		ExecutorService pool = workers();
+		List<Future<Object>> jobs = new ArrayList<>();
+		for (int index = 0; index < files.size(); index++)
+		{
+			Entry file = files.get(index);
+			Path target = targets.get(index);
+			jobs.add(pool.submit(() -> {
+				int number = started.incrementAndGet();
+				if (Files.isRegularFile(target) && Files.size(target) == file.size)
+				{
+					progress.update(completed.addAndGet(file.size), finalTotal, number, files.size(), file.name);
+					return null;
+				}
+				extract(file, target, written -> progress.update(completed.addAndGet(written), finalTotal,
+					number, files.size(), file.name));
+				return null;
+			}));
+		}
+		try
+		{
+			for (Future<Object> job : jobs)
+			{
+				job.get();
+			}
+		}
+		catch (InterruptedException interrupted)
+		{
+			jobs.forEach(job -> job.cancel(true));
+			Thread.currentThread().interrupt();
+			throw new InterruptedIOException("Extraction was interrupted");
+		}
+		catch (ExecutionException failure)
+		{
+			jobs.forEach(job -> job.cancel(true));
+			Throwable cause = failure.getCause();
+			if (cause instanceof IOException)
+			{
+				throw (IOException) cause;
+			}
+			throw new IOException(cause.getMessage(), cause);
+		}
+		progress.update(total, total, files.size(), files.size(), "");
+	}
+
+	private synchronized ExecutorService workers()
+	{
+		if (workers == null)
+		{
+			workers = Executors.newFixedThreadPool(WORKERS, task -> {
+				Thread thread = new Thread(task, "fatx-extract");
+				thread.setDaemon(true);
+				return thread;
+			});
+		}
+		return workers;
+	}
+
+	private long collect(Entry entry, Path target, List<Entry> files, List<Path> targets, int depth)
+		throws IOException
+	{
+		if (!entry.directory)
+		{
+			files.add(entry);
+			targets.add(target);
+			return entry.size;
+		}
+		if (depth > 64)
+		{
+			throw new IOException("The folder structure is too deep or contains a loop");
+		}
+		Files.createDirectories(target);
+		long total = 0;
+		for (Entry child : list(entry))
+		{
+			total += collect(child, target.resolve(child.name.replaceAll("[\\\\/:*?\"<>|]", "_")),
+				files, targets, depth + 1);
+		}
+		return total;
+	}
+
+	@FunctionalInterface
+	public interface Progress
+	{
+		void update(long completedBytes, long totalBytes, int fileNumber, int fileCount, String name);
 	}
 
 	public Entry importFile(Entry directory, Path localFile) throws IOException
@@ -284,6 +537,13 @@ public final class FatxDevice implements Closeable
 	@Override
 	public void close() throws IOException
 	{
+		synchronized (this)
+		{
+			if (workers != null)
+			{
+				workers.shutdownNow();
+			}
+		}
 		backing.close();
 	}
 
@@ -326,8 +586,18 @@ public final class FatxDevice implements Closeable
 				continue;
 			}
 			long availableSize = Math.min(candidate.size, size - candidate.offset);
-			found.add(createPartition(candidate.name, candidate.offset, availableSize, partitionId,
-				(int) sectorsPerCluster, rootCluster, candidate.usb));
+			try
+			{
+				Partition partition = createPartition(candidate.name, candidate.offset, availableSize,
+					partitionId, (int) sectorsPerCluster, rootCluster, candidate.usb);
+				if (!clusterChain(partition, partition.rootCluster).isEmpty())
+				{
+					found.add(partition);
+				}
+			}
+			catch (IOException | ArithmeticException ignored)
+			{
+			}
 		}
 		return found;
 	}
@@ -416,8 +686,7 @@ public final class FatxDevice implements Closeable
 		List<Long> chain = new ArrayList<>();
 		Set<Long> visited = new HashSet<>();
 		long current = startingCluster;
-		long last = lastMarker(partition);
-		while (current != 0 && current != last)
+		while (current != 0 && !isLastCluster(partition, current))
 		{
 			if (current < 1 || current > partition.clusterCount || !visited.add(current))
 			{
@@ -572,6 +841,11 @@ public final class FatxDevice implements Closeable
 	private static long clusterOffset(Partition partition, long cluster)
 	{
 		return partition.clusterStart + partition.clusterSize * (cluster - 1);
+	}
+
+	private static boolean isLastCluster(Partition partition, long value)
+	{
+		return value >= (partition.fatEntrySize == 2 ? 0xFFF8L : 0xFFFFFFF8L);
 	}
 
 	private static long lastMarker(Partition partition)
@@ -794,6 +1068,356 @@ public final class FatxDevice implements Closeable
 		public void close() throws IOException
 		{
 			channel.close();
+		}
+	}
+
+	static long probeSize(FileChannel channel)
+	{
+		if (!sectorReadable(channel, 0))
+		{
+			return 0;
+		}
+		long low = 0;
+		long high = 1;
+		while (high < (1L << 40) && sectorReadable(channel, high))
+		{
+			low = high;
+			high <<= 1;
+		}
+		while (high - low > 1)
+		{
+			long middle = (low + high) >>> 1;
+			if (sectorReadable(channel, middle))
+			{
+				low = middle;
+			}
+			else
+			{
+				high = middle;
+			}
+		}
+		return (low + 1) * DeviceBacking.SECTOR;
+	}
+
+	private static boolean sectorReadable(FileChannel channel, long sector)
+	{
+		try
+		{
+			return channel.read(ByteBuffer.allocate(DeviceBacking.SECTOR), sector * DeviceBacking.SECTOR) > 0;
+		}
+		catch (IOException failure)
+		{
+			return false;
+		}
+	}
+
+	private static final class DeviceBacking implements Backing
+	{
+		private static final int SECTOR = 512;
+		private static final int BLOCK = 4096;
+		private static final int WINDOW = 16384;
+		private static final int RETRIES = 8;
+		private final String device;
+		private final ThreadLocal<FileChannel> handles = new ThreadLocal<>();
+		private final List<FileChannel> opened = new ArrayList<>();
+		private final boolean writable;
+		private final long size;
+		private long windowStart = -1;
+		private byte[] window = new byte[0];
+
+		private DeviceBacking(String device, FileChannel channel, boolean writable) throws IOException
+		{
+			this.device = device;
+			register(channel);
+			this.writable = writable;
+			try
+			{
+				long measured = 0;
+				try
+				{
+					measured = channel.size();
+				}
+				catch (IOException ignored)
+				{
+				}
+				size = measured > 0 ? measured : probeSize(channel);
+			}
+			catch (RuntimeException failure)
+			{
+				channel.close();
+				throw failure;
+			}
+		}
+
+		private static DeviceBacking open(String name, boolean readOnly) throws IOException
+		{
+			String device = name.endsWith("\\") ? name.substring(0, name.length() - 1) : name;
+			FileChannel channel = null;
+			boolean writable = false;
+			if (!readOnly)
+			{
+				try
+				{
+					channel = FileChannel.open(Path.of(device), StandardOpenOption.READ, StandardOpenOption.WRITE);
+					writable = true;
+				}
+				catch (IOException | RuntimeException ignored)
+				{
+				}
+			}
+			if (channel == null)
+			{
+				try
+				{
+					channel = new RandomAccessFile(device, "r").getChannel();
+				}
+				catch (IOException failure)
+				{
+					throw new IOException("Could not open the storage device. Run OpenRTM as administrator, "
+						+ "close other programs that are using the device, and check the device number", failure);
+				}
+			}
+			try
+			{
+				return new DeviceBacking(device, channel, writable);
+			}
+			catch (IOException | RuntimeException failure)
+			{
+				channel.close();
+				throw failure;
+			}
+		}
+
+		@Override
+		public long size()
+		{
+			return size;
+		}
+
+		@Override
+		public byte[] read(long offset, int length) throws IOException
+		{
+			if (offset < 0 || offset + length > size)
+			{
+				throw new EOFException("Unexpected end of Xbox 360 storage device");
+			}
+			if (length >= WINDOW)
+			{
+				long start = offset - offset % BLOCK;
+				long end = Math.min(size, (offset + length + BLOCK - 1) / BLOCK * BLOCK);
+				byte[] block = readFully(start, (int) (end - start));
+				if (block.length == length)
+				{
+					return block;
+				}
+				byte[] slice = new byte[length];
+				System.arraycopy(block, (int) (offset - start), slice, 0, length);
+				return slice;
+			}
+			byte[] output = new byte[length];
+			synchronized (this)
+			{
+				int copied = 0;
+				while (copied < length)
+				{
+					long position = offset + copied;
+					if (position < windowStart || position >= windowStart + window.length)
+					{
+						load(position);
+					}
+					int inWindow = (int) (position - windowStart);
+					int count = Math.min(length - copied, window.length - inWindow);
+					System.arraycopy(window, inWindow, output, copied, count);
+					copied += count;
+				}
+			}
+			return output;
+		}
+
+		@Override
+		public void write(long offset, byte[] data) throws IOException
+		{
+			if (!writable)
+			{
+				throw new IOException("The storage device was opened read-only. Run OpenRTM as administrator "
+					+ "and close other programs that are using the device to make changes");
+			}
+			if (offset < 0 || offset + data.length > size)
+			{
+				throw new EOFException("Xbox 360 storage offset is outside the storage device");
+			}
+			long start = offset - offset % BLOCK;
+			long end = Math.min(size, (offset + data.length + BLOCK - 1) / BLOCK * BLOCK);
+			byte[] block = data;
+			if (start != offset || end != offset + data.length)
+			{
+				block = readFully(start, (int) (end - start));
+				System.arraycopy(data, 0, block, (int) (offset - start), data.length);
+			}
+			ByteBuffer buffer = ByteBuffer.wrap(block);
+			long position = start;
+			while (buffer.hasRemaining())
+			{
+				position += handle().write(buffer, position);
+			}
+			synchronized (this)
+			{
+				windowStart = -1;
+				window = new byte[0];
+			}
+		}
+
+		@Override
+		public void force() throws IOException
+		{
+			if (writable)
+			{
+				handle().force(true);
+			}
+		}
+
+		@Override
+		public void close() throws IOException
+		{
+			IOException failure = null;
+			synchronized (opened)
+			{
+				for (FileChannel handle : opened)
+				{
+					try
+					{
+						handle.close();
+					}
+					catch (IOException closeFailure)
+					{
+						failure = closeFailure;
+					}
+				}
+				opened.clear();
+			}
+			if (failure != null)
+			{
+				throw failure;
+			}
+		}
+
+		private void register(FileChannel handle)
+		{
+			synchronized (opened)
+			{
+				opened.add(handle);
+			}
+			handles.set(handle);
+		}
+
+		private FileChannel handle() throws IOException
+		{
+			FileChannel current = handles.get();
+			if (current == null || !current.isOpen())
+			{
+				current = openChannel(device, writable);
+				register(current);
+			}
+			return current;
+		}
+
+		private void load(long position) throws IOException
+		{
+			long start = position - position % WINDOW;
+			window = readFully(start, (int) Math.min(WINDOW, size - start));
+			windowStart = start;
+		}
+
+		private byte[] readFully(long start, int length) throws IOException
+		{
+			IOException last = null;
+			for (int attempt = 0; attempt < RETRIES; attempt++)
+			{
+				try
+				{
+					return readOnce(start, length);
+				}
+				catch (EOFException failure)
+				{
+					throw failure;
+				}
+				catch (IOException failure)
+				{
+					last = failure;
+					if (attempt + 1 < RETRIES)
+					{
+						pause(attempt);
+						reopen();
+					}
+				}
+			}
+			throw last;
+		}
+
+		private byte[] readOnce(long start, int length) throws IOException
+		{
+			FileChannel current = handle();
+			ByteBuffer data = ByteBuffer.allocate(length);
+			long position = start;
+			while (data.hasRemaining())
+			{
+				int count = current.read(data, position);
+				if (count <= 0)
+				{
+					throw new EOFException("Unexpected end of Xbox 360 storage device");
+				}
+				position += count;
+			}
+			return data.array();
+		}
+
+		private static void pause(int attempt) throws IOException
+		{
+			try
+			{
+				Thread.sleep(Math.min(5000L, 1000L * (attempt + 1)));
+			}
+			catch (InterruptedException interrupted)
+			{
+				Thread.currentThread().interrupt();
+				throw new InterruptedIOException("Reading the storage device was interrupted");
+			}
+		}
+
+		private void reopen()
+		{
+			FileChannel previous = handles.get();
+			try
+			{
+				register(openChannel(device, writable));
+			}
+			catch (IOException | RuntimeException ignored)
+			{
+				return;
+			}
+			if (previous != null)
+			{
+				try
+				{
+					previous.close();
+				}
+				catch (IOException ignored)
+				{
+				}
+				synchronized (opened)
+				{
+					opened.remove(previous);
+				}
+			}
+		}
+
+		private static FileChannel openChannel(String device, boolean writable) throws IOException
+		{
+			if (writable)
+			{
+				return FileChannel.open(Path.of(device), StandardOpenOption.READ, StandardOpenOption.WRITE);
+			}
+			return new RandomAccessFile(device, "r").getChannel();
 		}
 	}
 
