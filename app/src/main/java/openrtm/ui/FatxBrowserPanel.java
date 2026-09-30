@@ -34,18 +34,22 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 
 public final class FatxBrowserPanel extends FileDropPanel
 {
@@ -59,6 +63,13 @@ public final class FatxBrowserPanel extends FileDropPanel
 	private final DefaultTreeModel model = new DefaultTreeModel(root);
 	private final JTree tree = new JTree(model);
 	private final JLabel selectedPath = new JLabel(" ");
+	private final TransferEstimate estimator = new TransferEstimate();
+	private String progressVerb = "Extracting";
+	private final JButton cancelExtract = new JButton("Cancel");
+	private volatile boolean cancelRequested;
+	private volatile long lastScanUpdate;
+	private final ArrayDeque<TreePath> history = new ArrayDeque<>();
+	private boolean navigating;
 	private final JLabel extractStatus = new JLabel(" ");
 	private final JProgressBar extractProgress = new JProgressBar(0, 100);
 	private FatxDevice device;
@@ -77,7 +88,16 @@ public final class FatxBrowserPanel extends FileDropPanel
 		JPanel footer = new JPanel(new BorderLayout(8, 0));
 		footer.add(selectedPath, BorderLayout.WEST);
 		footer.add(extractStatus, BorderLayout.CENTER);
-		footer.add(extractProgress, BorderLayout.EAST);
+		cancelExtract.setVisible(false);
+		cancelExtract.addActionListener(event -> {
+			cancelRequested = true;
+			cancelExtract.setEnabled(false);
+			extractStatus.setText("Cancelling");
+		});
+		JPanel controls = new JPanel(new BorderLayout(8, 0));
+		controls.add(cancelExtract, BorderLayout.WEST);
+		controls.add(extractProgress, BorderLayout.CENTER);
+		footer.add(controls, BorderLayout.EAST);
 		add(footer, BorderLayout.SOUTH);
 		refreshDetected();
 		enableFileDrop("Drop files here to use!", this::dropFiles);
@@ -133,6 +153,8 @@ public final class FatxBrowserPanel extends FileDropPanel
 		actions.add(new JLabel("Partition"));
 		partitions.addActionListener(event -> showPartition());
 		actions.add(partitions);
+		JButton back = new JButton("Back");
+		back.addActionListener(event -> goBack());
 		JButton refresh = new JButton("Refresh");
 		JButton extract = new JButton("Extract");
 		JButton importFile = new JButton("Import File");
@@ -143,6 +165,7 @@ public final class FatxBrowserPanel extends FileDropPanel
 		importFile.addActionListener(event -> importSelected());
 		newFolder.addActionListener(event -> createFolder());
 		delete.addActionListener(event -> deleteSelected());
+		actions.add(back);
 		actions.add(refresh);
 		actions.add(extract);
 		actions.add(importFile);
@@ -162,6 +185,16 @@ public final class FatxBrowserPanel extends FileDropPanel
 		ToolTipManager.sharedInstance().registerComponent(tree);
 		tree.addTreeSelectionListener(event -> {
 			StorageNode selected = selectedNode();
+			TreePath current = tree.getSelectionPath();
+			if (!navigating && current != null && selected != null && selected.entry != null
+				&& selected.entry.directory() && !current.equals(history.peekLast()))
+			{
+				history.addLast(current);
+				if (history.size() > 100)
+				{
+					history.removeFirst();
+				}
+			}
 			selectedPath.setText(selected == null || selected.entry == null
 				? " " : friendlyStoragePath(selected.entry.path()));
 		});
@@ -258,8 +291,40 @@ public final class FatxBrowserPanel extends FileDropPanel
 		}
 	}
 
+	private void goBack()
+	{
+		history.pollLast();
+		while (!history.isEmpty())
+		{
+			TreePath previous = history.pollLast();
+			Object last = previous.getLastPathComponent();
+			if (last instanceof DefaultMutableTreeNode && ((DefaultMutableTreeNode) last).getRoot() == root)
+			{
+				navigating = true;
+				try
+				{
+					tree.setSelectionPath(previous);
+					tree.scrollPathToVisible(previous);
+				}
+				finally
+				{
+					navigating = false;
+				}
+				history.addLast(previous);
+				return;
+			}
+		}
+		TreePath current = tree.getSelectionPath();
+		if (current != null && current.getParentPath() != null && current.getParentPath().getParentPath() != null)
+		{
+			tree.setSelectionPath(current.getParentPath());
+			tree.scrollPathToVisible(current.getParentPath());
+		}
+	}
+
 	private void showPartition()
 	{
+		history.clear();
 		FatxDevice.Partition partition = (FatxDevice.Partition) partitions.getSelectedItem();
 		root.removeAllChildren();
 		if (partition != null)
@@ -343,6 +408,7 @@ public final class FatxBrowserPanel extends FileDropPanel
 		{
 			FatxDevice.Entry file = entries.get(0);
 			JFileChooser chooser = new JFileChooser();
+			addHistory(chooser);
 			chooser.setSelectedFile(Path.of(file.name()).toFile());
 			if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION)
 			{
@@ -352,6 +418,7 @@ public final class FatxBrowserPanel extends FileDropPanel
 		}
 		JFileChooser folderChooser = new JFileChooser();
 		folderChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+		addHistory(folderChooser);
 		folderChooser.setDialogTitle(entries.size() == 1
 			? "Choose where to extract the folder" : "Choose where to extract the selected items");
 		if (folderChooser.showDialog(this, "Extract Here") == JFileChooser.APPROVE_OPTION)
@@ -369,27 +436,68 @@ public final class FatxBrowserPanel extends FileDropPanel
 
 	private void extractWithProgress(List<FatxDevice.Entry> entries, List<Path> targets)
 	{
+		runWithProgress("Extracting", "extract Xbox storage items",
+			progress -> device.extractItems(entries, targets, progress), null);
+	}
+
+	private void runWithProgress(String verb, String label, ProgressTask work, Runnable afterwards)
+	{
+		cancelRequested = false;
+		boolean[] cancelled = {false};
 		SwingUtilities.invokeLater(() -> {
+			progressVerb = verb;
+			estimator.reset();
 			extractProgress.setIndeterminate(true);
 			extractProgress.setString("");
 			extractProgress.setVisible(true);
+			cancelExtract.setEnabled(true);
+			cancelExtract.setVisible(true);
 			extractStatus.setText("Scanning selected items");
 		});
-		tasks.run("extract Xbox storage items", () -> {
+		tasks.run(label, () -> {
 			try
 			{
-				device.extractItems(entries, targets, (completed, total, number, count, name) ->
-					SwingUtilities.invokeLater(() -> showExtractProgress(completed, total, number, count, name)));
+				work.run((completed, total, number, count, name) -> {
+					if (cancelRequested)
+					{
+						throw new CancellationException("Cancelled");
+					}
+					long now = System.nanoTime();
+					if (total < 0)
+					{
+						if (now - lastScanUpdate < 100_000_000L)
+						{
+							return;
+						}
+						lastScanUpdate = now;
+					}
+					SwingUtilities.invokeLater(() -> showExtractProgress(completed, total, number, count, name));
+				});
+			}
+			catch (CancellationException stopped)
+			{
+				cancelled[0] = true;
 			}
 			finally
 			{
 				SwingUtilities.invokeLater(() -> {
 					extractProgress.setIndeterminate(false);
 					extractProgress.setVisible(false);
-					extractStatus.setText(" ");
+					cancelExtract.setVisible(false);
+					extractStatus.setText(cancelled[0] ? "Cancelled" : " ");
+					if (afterwards != null)
+					{
+						afterwards.run();
+					}
 				});
 			}
 		});
+	}
+
+	@FunctionalInterface
+	private interface ProgressTask
+	{
+		void run(FatxDevice.Progress progress) throws Exception;
 	}
 
 	private void showExtractProgress(long completed, long total, int number, int count, String name)
@@ -403,9 +511,67 @@ public final class FatxBrowserPanel extends FileDropPanel
 		extractProgress.setIndeterminate(false);
 		extractProgress.setValue(percent);
 		extractProgress.setString(percent + "%");
-		extractStatus.setText(count == 0 ? "No files to extract"
-			: name.isEmpty() ? "Extracted " + count + " files"
-			: "Extracting " + number + " of " + count + ": " + name);
+		String past = progressVerb.equals("Importing") ? "Imported" : "Extracted";
+		extractStatus.setText(count == 0 ? "No files found"
+			: name.isEmpty() ? past + " " + count + " files"
+			: estimator.describe(completed, total) + progressVerb + " " + number + " of " + count + ": " + name);
+	}
+
+	private static void addHistory(JFileChooser chooser)
+	{
+		UIManager.put("FileChooser.useShellFolder", Boolean.FALSE);
+		chooser.putClientProperty("FileChooser.useShellFolder", Boolean.FALSE);
+		List<File> visited = new ArrayList<>();
+		int[] position = {-1};
+		boolean[] moving = {false};
+		JButton back = new JButton("Back");
+		JButton forward = new JButton("Forward");
+		Runnable refresh = () -> {
+			back.setEnabled(position[0] > 0);
+			forward.setEnabled(position[0] >= 0 && position[0] < visited.size() - 1);
+		};
+		File start = chooser.getCurrentDirectory();
+		if (start != null)
+		{
+			visited.add(start);
+			position[0] = 0;
+		}
+		chooser.addPropertyChangeListener(JFileChooser.DIRECTORY_CHANGED_PROPERTY, event -> {
+			File current = chooser.getCurrentDirectory();
+			if (moving[0] || current == null || (position[0] >= 0 && current.equals(visited.get(position[0]))))
+			{
+				return;
+			}
+			while (visited.size() > position[0] + 1)
+			{
+				visited.remove(visited.size() - 1);
+			}
+			visited.add(current);
+			position[0]++;
+			refresh.run();
+		});
+		back.addActionListener(event -> {
+			moving[0] = true;
+			position[0]--;
+			chooser.setCurrentDirectory(visited.get(position[0]));
+			moving[0] = false;
+			refresh.run();
+		});
+		forward.addActionListener(event -> {
+			moving[0] = true;
+			position[0]++;
+			chooser.setCurrentDirectory(visited.get(position[0]));
+			moving[0] = false;
+			refresh.run();
+		});
+		refresh.run();
+		JPanel accessory = new JPanel(new GridLayout(2, 1, 0, 6));
+		accessory.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 0));
+		accessory.add(back);
+		accessory.add(forward);
+		JPanel holder = new JPanel(new BorderLayout());
+		holder.add(accessory, BorderLayout.NORTH);
+		chooser.setAccessory(holder);
 	}
 
 	private List<FatxDevice.Entry> selectedEntries()
@@ -464,29 +630,49 @@ public final class FatxBrowserPanel extends FileDropPanel
 			return;
 		}
 		JFileChooser chooser = new JFileChooser();
+		chooser.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
+		chooser.setMultiSelectionEnabled(true);
+		addHistory(chooser);
+		chooser.setDialogTitle("Choose files or folders to import");
 		if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION)
 		{
-			String fileName = chooser.getSelectedFile().getName();
-			int answer = JOptionPane.showConfirmDialog(this,
-				"Import " + fileName + " into the selected folder? A same-name file will be replaced.",
-				"Import File", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-			if (answer != JOptionPane.YES_OPTION)
+			List<Path> paths = new ArrayList<>();
+			for (File file : chooser.getSelectedFiles())
 			{
-				return;
+				paths.add(file.toPath());
 			}
-			tasks.run("import Xbox storage file", () -> {
-				device.importFile(directory.entry, chooser.getSelectedFile().toPath());
-				directory.loaded = false;
-				SwingUtilities.invokeLater(() -> loadNode(directoryNode));
-			});
+			importPaths(directoryNode, directory, paths);
 		}
+	}
+
+	private boolean importPaths(DefaultMutableTreeNode directoryNode, StorageNode directory, List<Path> paths)
+	{
+		if (paths.isEmpty())
+		{
+			return false;
+		}
+		String message = paths.size() == 1
+			? "Import " + paths.get(0).getFileName() + " into the selected folder? Same-name files will be replaced."
+			: "Import " + paths.size() + " items into the selected folder? Same-name files will be replaced.";
+		if (JOptionPane.showConfirmDialog(this, message, "Import",
+			JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)
+		{
+			return false;
+		}
+		runWithProgress("Importing", "import Xbox storage items",
+			progress -> device.importItems(directory.entry, paths, progress),
+			() -> {
+				directory.loaded = false;
+				loadNode(directoryNode);
+			});
+		return true;
 	}
 
 	private boolean dropFiles(List<Path> paths)
 	{
-		if (paths.isEmpty() || paths.stream().anyMatch(path -> !Files.isRegularFile(path)))
+		if (paths.isEmpty() || paths.stream().anyMatch(path -> !Files.isRegularFile(path) && !Files.isDirectory(path)))
 		{
-			showWarning("Drop one or more PC files");
+			showWarning("Drop one or more PC files or folders");
 			return false;
 		}
 		DefaultMutableTreeNode directoryNode = selectedDirectoryNode();
@@ -496,23 +682,7 @@ public final class FatxBrowserPanel extends FileDropPanel
 			showWarning("Select a destination folder");
 			return false;
 		}
-		String message = paths.size() == 1
-			? "Import " + paths.get(0).getFileName() + " into the selected folder? A same-name file will be replaced."
-			: "Import " + paths.size() + " files into the selected folder? Same-name files will be replaced.";
-		if (JOptionPane.showConfirmDialog(this, message, "Import Files",
-			JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION)
-		{
-			return false;
-		}
-		tasks.run("import Xbox storage files", () -> {
-			for (Path path : paths)
-			{
-				device.importFile(directory.entry, path);
-			}
-			directory.loaded = false;
-			SwingUtilities.invokeLater(() -> loadNode(directoryNode));
-		});
-		return true;
+		return importPaths(directoryNode, directory, paths);
 	}
 
 	private void createFolder()

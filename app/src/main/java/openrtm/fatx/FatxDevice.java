@@ -10,6 +10,7 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
@@ -21,6 +22,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -343,7 +347,7 @@ public final class FatxDevice implements Closeable
 		for (int index = 0; index < entries.size(); index++)
 		{
 			total += collect(entries.get(index), destinations.get(index).toAbsolutePath().normalize(),
-				files, targets, 0);
+				files, targets, 0, progress);
 		}
 		long finalTotal = total;
 		AtomicLong completed = new AtomicLong();
@@ -383,6 +387,10 @@ public final class FatxDevice implements Closeable
 		{
 			jobs.forEach(job -> job.cancel(true));
 			Throwable cause = failure.getCause();
+			if (cause instanceof CancellationException)
+			{
+				throw (CancellationException) cause;
+			}
 			if (cause instanceof IOException)
 			{
 				throw (IOException) cause;
@@ -405,8 +413,8 @@ public final class FatxDevice implements Closeable
 		return workers;
 	}
 
-	private long collect(Entry entry, Path target, List<Entry> files, List<Path> targets, int depth)
-		throws IOException
+	private long collect(Entry entry, Path target, List<Entry> files, List<Path> targets, int depth,
+	                     Progress progress) throws IOException
 	{
 		if (!entry.directory)
 		{
@@ -418,12 +426,13 @@ public final class FatxDevice implements Closeable
 		{
 			throw new IOException("The folder structure is too deep or contains a loop");
 		}
+		progress.update(0, -1, 0, files.size(), "");
 		Files.createDirectories(target);
 		long total = 0;
 		for (Entry child : list(entry))
 		{
 			total += collect(child, target.resolve(child.name.replaceAll("[\\\\/:*?\"<>|]", "_")),
-				files, targets, depth + 1);
+				files, targets, depth + 1, progress);
 		}
 		return total;
 	}
@@ -435,6 +444,116 @@ public final class FatxDevice implements Closeable
 	}
 
 	public Entry importFile(Entry directory, Path localFile) throws IOException
+	{
+		Entry imported = importFile(directory, localFile, written -> {
+		});
+		backing.force();
+		return imported;
+	}
+
+	public void importItems(Entry directory, List<Path> sources, Progress progress) throws IOException
+	{
+		requireWritableDirectory(directory);
+		progress.update(0, -1, 0, 0, "");
+		long[] totals = new long[2];
+		for (Path source : sources)
+		{
+			scanImport(source, totals, 0, progress);
+		}
+		long finalTotal = totals[0];
+		int count = (int) totals[1];
+		AtomicLong completed = new AtomicLong();
+		AtomicInteger started = new AtomicInteger();
+		try
+		{
+			for (Path source : sources)
+			{
+				importPath(directory, source, 0, (name, size) -> {
+					int number = started.incrementAndGet();
+					return written -> progress.update(completed.addAndGet(written), finalTotal, number, count, name);
+				});
+			}
+		}
+		finally
+		{
+			backing.force();
+		}
+		progress.update(finalTotal, finalTotal, count, count, "");
+	}
+
+	private void scanImport(Path source, long[] totals, int depth, Progress progress) throws IOException
+	{
+		progress.update(0, -1, 0, (int) totals[1], "");
+		if (depth > 64)
+		{
+			throw new IOException("The folder structure is too deep or contains a loop");
+		}
+		String name = source.getFileName().toString();
+		try
+		{
+			validateName(name);
+		}
+		catch (IllegalArgumentException invalid)
+		{
+			throw new IOException("\"" + name + "\" cannot be imported. " + invalid.getMessage());
+		}
+		if (Files.isDirectory(source))
+		{
+			try (Stream<Path> children = Files.list(source))
+			{
+				for (Path child : (Iterable<Path>) children.sorted()::iterator)
+				{
+					scanImport(child, totals, depth + 1, progress);
+				}
+			}
+		}
+		else if (Files.isRegularFile(source))
+		{
+			long size = Files.size(source);
+			if (size > 0xFFFFFFFFL)
+			{
+				throw new IOException("\"" + name + "\" is 4 GB or larger. FATX files must be smaller than 4 GB");
+			}
+			totals[0] += size;
+			totals[1]++;
+		}
+	}
+
+	private void importPath(Entry directory, Path source, int depth, FileProgress files) throws IOException
+	{
+		String name = source.getFileName().toString();
+		if (Files.isDirectory(source))
+		{
+			Entry target = findChild(directory, name);
+			if (target == null)
+			{
+				target = makeDirectory(directory, name);
+			}
+			else if (!target.directory)
+			{
+				throw new IOException("A file named \"" + name + "\" already exists in this folder");
+			}
+			try (Stream<Path> children = Files.list(source))
+			{
+				for (Path child : (Iterable<Path>) children.sorted()::iterator)
+				{
+					importPath(target, child, depth + 1, files);
+				}
+			}
+		}
+		else if (Files.isRegularFile(source))
+		{
+			importFile(directory, source, files.begin(name, Files.size(source)));
+		}
+	}
+
+	@FunctionalInterface
+	private interface FileProgress
+	{
+		LongConsumer begin(String name, long size);
+	}
+
+	private Entry importFile(Entry directory, Path localFile, LongConsumer written) throws IOException
 	{
 		if (localFile == null || !Files.isRegularFile(localFile))
 		{
@@ -459,10 +578,10 @@ public final class FatxDevice implements Closeable
 		try
 		{
 			writeChain(directory.partition, allocated);
-			writeFileData(directory.partition, allocated, localFile, size);
+			writeFileData(directory.partition, allocated, localFile, size, written);
 			return finishImport(directory, name, size, allocated, existing);
 		}
-		catch (IOException failure)
+		catch (IOException | RuntimeException failure)
 		{
 			freeChain(directory.partition, allocated);
 			throw failure;
@@ -480,7 +599,9 @@ public final class FatxDevice implements Closeable
 		{
 			writeChain(directory.partition, allocated);
 			writeData(directory.partition, allocated, data, (byte) 0);
-			return finishImport(directory, name, data.length, allocated, existing);
+			Entry imported = finishImport(directory, name, data.length, allocated, existing);
+			backing.force();
+			return imported;
 		}
 		catch (IOException failure)
 		{
@@ -490,6 +611,13 @@ public final class FatxDevice implements Closeable
 	}
 
 	public Entry createDirectory(Entry directory, String name) throws IOException
+	{
+		Entry created = makeDirectory(directory, name);
+		backing.force();
+		return created;
+	}
+
+	private Entry makeDirectory(Entry directory, String name) throws IOException
 	{
 		requireWritableDirectory(directory);
 		validateName(name);
@@ -504,7 +632,6 @@ public final class FatxDevice implements Closeable
 			writeData(directory.partition, allocated, new byte[0], (byte) 0xFF);
 			long entryAddress = findDirectorySlot(directory);
 			writeDirectoryEntry(entryAddress, name, 0x10, allocated.get(0), 0);
-			backing.force();
 			return new Entry(directory.partition, name,
 				directory.path.equals("/") ? "/" + name : directory.path + "/" + name,
 				true, 0x10, allocated.get(0), 0, entryAddress);
@@ -663,16 +790,24 @@ public final class FatxDevice implements Closeable
 	private List<Long> allocate(Partition partition, int count) throws IOException
 	{
 		List<Long> free = new ArrayList<>(count);
-		for (long cluster = 1; cluster <= partition.clusterCount && free.size() < count; cluster++)
+		long cluster = Math.min(Math.max(1, partition.allocationHint), partition.clusterCount);
+		long scanned = 0;
+		while (free.size() < count && scanned < partition.clusterCount)
 		{
 			if (readFat(partition, cluster) == 0)
 			{
 				free.add(cluster);
 			}
+			cluster = cluster == partition.clusterCount ? 1 : cluster + 1;
+			scanned++;
 		}
 		if (free.size() != count)
 		{
 			throw new IOException("Xbox 360 storage device does not have enough free space");
+		}
+		if (!free.isEmpty())
+		{
+			partition.allocationHint = cluster;
 		}
 		return free;
 	}
@@ -758,14 +893,22 @@ public final class FatxDevice implements Closeable
 		}
 	}
 
-	private void writeFileData(Partition partition, List<Long> clusters, Path file, long size) throws IOException
+	private void writeFileData(Partition partition, List<Long> clusters, Path file, long size, LongConsumer written)
+		throws IOException
 	{
 		try (FileChannel source = FileChannel.open(file, StandardOpenOption.READ))
 		{
 			long remaining = size;
-			for (long cluster : clusters)
+			int index = 0;
+			while (index < clusters.size())
 			{
-				byte[] block = new byte[partition.clusterSize];
+				int run = 1;
+				while (index + run < clusters.size() && clusters.get(index + run) == clusters.get(index) + run
+					&& (long) (run + 1) * partition.clusterSize <= MAX_RUN)
+				{
+					run++;
+				}
+				byte[] block = new byte[run * partition.clusterSize];
 				int length = (int) Math.min(block.length, remaining);
 				ByteBuffer buffer = ByteBuffer.wrap(block, 0, length);
 				while (buffer.hasRemaining())
@@ -775,8 +918,10 @@ public final class FatxDevice implements Closeable
 						throw new EOFException("Local file ended while it was being imported");
 					}
 				}
-				backing.write(clusterOffset(partition, cluster), block);
+				backing.write(clusterOffset(partition, clusters.get(index)), block);
 				remaining -= length;
+				index += run;
+				written.accept(length);
 			}
 			if (remaining != 0)
 			{
@@ -795,7 +940,6 @@ public final class FatxDevice implements Closeable
 		{
 			freeChain(existing.partition, clusterChain(existing.partition, existing.startingCluster));
 		}
-		backing.force();
 		return new Entry(directory.partition, name,
 			directory.path.equals("/") ? "/" + name : directory.path + "/" + name,
 			false, 0, firstCluster, size, entryAddress);
@@ -884,6 +1028,7 @@ public final class FatxDevice implements Closeable
 		private final long clusterCount;
 		private final long clusterStart;
 		private final long rootCluster;
+		private long allocationHint = 1;
 		private Entry root;
 
 		private Partition(String name, long offset, long size, long id, int clusterSize, int fatEntrySize,
@@ -1117,6 +1262,7 @@ public final class FatxDevice implements Closeable
 		private static final int BLOCK = 4096;
 		private static final int WINDOW = 16384;
 		private static final int RETRIES = 8;
+		private static final Map<String, String> RESOLVED = new ConcurrentHashMap<>();
 		private final String device;
 		private final ThreadLocal<FileChannel> handles = new ThreadLocal<>();
 		private final List<FileChannel> opened = new ArrayList<>();
@@ -1158,7 +1304,7 @@ public final class FatxDevice implements Closeable
 			{
 				try
 				{
-					channel = FileChannel.open(Path.of(device), StandardOpenOption.READ, StandardOpenOption.WRITE);
+					channel = openChannel(device, true);
 					writable = true;
 				}
 				catch (IOException | RuntimeException ignored)
@@ -1415,7 +1561,38 @@ public final class FatxDevice implements Closeable
 		{
 			if (writable)
 			{
-				return FileChannel.open(Path.of(device), StandardOpenOption.READ, StandardOpenOption.WRITE);
+				String number = device.replaceAll("(?i)^.*PhysicalDrive", "");
+				if (!number.matches("\\d+"))
+				{
+					throw new IOException("Unsupported storage device name");
+				}
+				String known = RESOLVED.get(device);
+				if (known != null)
+				{
+					try
+					{
+						return FileChannel.open(Path.of(known), StandardOpenOption.READ, StandardOpenOption.WRITE);
+					}
+					catch (IOException stale)
+					{
+						RESOLVED.remove(device);
+					}
+				}
+				for (int index = 0; index < 4096; index++)
+				{
+					String candidate = "\\\\.\\GLOBALROOT\\Device\\Harddisk" + number + "\\DR" + index;
+					try
+					{
+						FileChannel opened = FileChannel.open(Path.of(candidate), StandardOpenOption.READ,
+							StandardOpenOption.WRITE);
+						RESOLVED.put(device, candidate);
+						return opened;
+					}
+					catch (NoSuchFileException missing)
+					{
+					}
+				}
+				throw new IOException("The storage device could not be opened for writing");
 			}
 			return new RandomAccessFile(device, "r").getChannel();
 		}
