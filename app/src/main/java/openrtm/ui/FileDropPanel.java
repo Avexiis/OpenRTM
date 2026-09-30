@@ -2,6 +2,7 @@ package openrtm.ui;
 
 import com.formdev.flatlaf.extras.FlatSVGIcon;
 
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
@@ -33,6 +34,7 @@ import java.util.function.Predicate;
 
 abstract class FileDropPanel extends JPanel
 {
+	static final String OWN_DROP = "openrtm.ownDrop";
 	private static final Color VEIL = new Color(20, 22, 25, 172);
 	private static final float[] BLUR = {
 		0.04f, 0.04f, 0.04f, 0.04f, 0.04f,
@@ -77,6 +79,16 @@ abstract class FileDropPanel extends JPanel
 		}
 	}
 
+	protected boolean acceptsDrop()
+	{
+		return true;
+	}
+
+	protected final void setDropOverlay(boolean active)
+	{
+		setDropActive(active);
+	}
+
 	protected final JLabel fileDropHint(String text)
 	{
 		JLabel label = new JLabel(text);
@@ -110,7 +122,7 @@ abstract class FileDropPanel extends JPanel
 			public void drop(DropTargetDropEvent event)
 			{
 				setDropActive(false);
-				if (!event.isDataFlavorSupported(DataFlavor.javaFileListFlavor))
+				if (!acceptsDrop() || !event.isDataFlavorSupported(DataFlavor.javaFileListFlavor))
 				{
 					event.rejectDrop();
 					return;
@@ -138,7 +150,7 @@ abstract class FileDropPanel extends JPanel
 
 			private void updateDrag(DropTargetDragEvent event)
 			{
-				boolean supported = event.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
+				boolean supported = acceptsDrop() && event.isDataFlavorSupported(DataFlavor.javaFileListFlavor);
 				if (supported)
 				{
 					event.acceptDrag(DnDConstants.ACTION_COPY);
@@ -154,6 +166,10 @@ abstract class FileDropPanel extends JPanel
 
 	private void installDropTargets(Component target, Predicate<List<Path>> action)
 	{
+		if (target instanceof JComponent component && Boolean.TRUE.equals(component.getClientProperty(OWN_DROP)))
+		{
+			return;
+		}
 		installDropTarget(target, action);
 		if (target instanceof Container container)
 		{

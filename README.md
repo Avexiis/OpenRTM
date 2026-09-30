@@ -68,7 +68,7 @@ Drag and drop is available for:
 * One or more content packages for installation
 * One or more `.xex` modules for loading
 * Files or folders uploaded into the selected console folder on File Transfer
-* One or more files imported into the selected folder on Xbox Storage
+* One or more files or folders imported into the selected folder on Xbox Storage
 * Key vault files and folders on KV Checker
 
 Profiles, packages, game saves, content packages, key vaults, and modules are validated before the requested operation proceeds. An ISO drop fills the input field; choose the output and click **Run** when ready.
@@ -171,6 +171,17 @@ Uploads inspect data already present on the console. Matching data is kept, inco
 
 Downloaded folders keep their files and subfolders. OpenRTM asks before replacing an existing local destination.
 
+### Dragging between the two sides
+
+Drag one or more files or folders (hold Ctrl or Shift to select several) between the two sides:
+
+* From the computer onto a console folder to upload it.
+* From the console onto a computer folder to download it.
+* From one console folder onto another to move it. OpenRTM asks for confirmation first.
+* From a console folder out to the desktop or a Windows folder. The items are downloaded first, so large items make OpenRTM wait until the download finishes.
+
+Transfers show a progress bar with the estimated time remaining and the current speed. Windows does not allow dragging files from Windows into a program running as administrator, so run OpenRTM normally when you want to drag files in from the desktop.
+
 Use the refresh buttons when either side changes outside OpenRTM. **New Folder**, **Rename**, **Properties**, and **Delete** apply to the PC or Xbox side selected most recently. Renaming and deleting always require confirmation, and deletion cannot be undone.
 
 **Properties** displays the selected item's type, size, timestamps, and attributes. Read-only and hidden attributes can be changed when supported by the selected storage.
@@ -254,7 +265,11 @@ Xbox Storage opens Xbox 360 FATX storage independently of the networked File Tra
 
 On Linux, readable storage devices may appear automatically under **Detected device**. On Windows, run OpenRTM as administrator and Xbox 360 storage devices that are not opened by another program appear under **Detected device**. You can also enter a device such as `\\.\PhysicalDrive1` as the source, using the disk number shown in Disk Management. A source can also be entered or selected manually. Open the source, choose a detected partition, and expand folders to browse it.
 
-The page can extract selected files and folders, including all folder contents (hold Ctrl or Shift to select several at once), import a computer file, create a folder, and recursively delete a selected file or folder. You can also drop one or more computer files onto the page to import them into the selected FATX folder. Same-name imports replace the existing file after confirmation. Individual FATX files must be smaller than 4 GB.
+The page can extract selected files and folders, including all folder contents (hold Ctrl or Shift to select several at once), import computer files and whole folders, create a folder, and recursively delete a selected file or folder. You can also drop computer files and folders onto the page to import them into the selected FATX folder. Same-name files are replaced after confirmation, and names that FATX does not allow are reported before anything is copied. Individual FATX files must be smaller than 4 GB.
+
+Extracting and importing show a progress bar with the estimated time remaining and can be stopped with **Cancel**. Extracting again into the same destination skips files that are already there with the same size, so an interrupted extraction can be continued. **Back** returns to the previously viewed folder.
+
+On Windows the drive is read-only if OpenRTM is not running as administrator.
 
 Content folders use the same friendly gamertag, title, and content type names as File Transfer. Use the **ID** button to view an actual folder ID.
 
