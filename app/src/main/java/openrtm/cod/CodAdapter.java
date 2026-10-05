@@ -1,5 +1,6 @@
 package openrtm.cod;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -103,4 +104,14 @@ public interface CodAdapter
 	List<TextOption> textOptions();
 
 	void setText(String key, String value, int client);
+
+	default boolean gscInjectionSupported()
+	{
+		return false;
+	}
+
+	default void injectGsc(Path source)
+	{
+		throw new UnsupportedOperationException(game().tabName() + " does not support GSC injection");
+	}
 }

@@ -596,6 +596,21 @@ public final class ConsoleService
 		return JRPC.Call(requireConsole(), JRPC.ThreadType.Title, address, arguments);
 	}
 
+	public synchronized long allocateTitleMemory(int length)
+	{
+		if (length <= 0)
+		{
+			throw new IllegalArgumentException("Allocation length must be positive");
+		}
+		long address = JRPC.Call(requireConsole(), JRPC.ThreadType.Title, "xam.xex", 1161, length, 0);
+		address &= 0xFFFFFFFFL;
+		if (address == 0)
+		{
+			throw new IllegalStateException("The console could not reserve enough memory");
+		}
+		return address;
+	}
+
 	public synchronized void writeAsciiNull(long address, String value)
 	{
 		writeMemory(address, HexUtils.asciiNull(value));

@@ -83,6 +83,10 @@ public final class CodOptionsPanel extends JPanel
 		{
 			sections.addTab("Game Options", createOptionsPanel(adapter, clients));
 		}
+		if (adapter.gscInjectionSupported())
+		{
+			sections.addTab("Inject GSC", new GscInjectionPanel(adapter, taskRunner));
+		}
 		panel.add(sections, BorderLayout.CENTER);
 		return panel;
 	}

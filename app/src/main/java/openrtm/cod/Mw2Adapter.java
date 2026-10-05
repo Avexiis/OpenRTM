@@ -1,8 +1,11 @@
 package openrtm.cod;
 
+import openrtm.cod.gsc.Iw4GscCompiler;
+import openrtm.cod.gsc.Iw4GscProgram;
 import openrtm.console.ConsoleService;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -23,6 +26,21 @@ final class Mw2Adapter extends AbstractCodAdapter
 	private static final long SPEED = 0x821D1DE2L;
 	private static final long ENTITY = 2196780544L;
 	private static final long ENTITY_SIZE = 640L;
+	private static final long SCRIPT_IMAGE = 0x82500500L;
+	private static final long SCRIPT_POINTER = 0x823D2DE8L;
+	private static final long SCRIPT_STRING = 0x82242250L;
+	private static final int SCRIPT_CAPACITY = 0x37FFF;
+	private static final int STOCK_SCRIPT_POINTER = 0x823A3510;
+	private static final int SCRIPT_HIGH = 0x823D;
+	private static final int SCRIPT_LOW = 0x2DE8;
+	private static final long[] SCRIPT_HIGH_PATCHES = {
+		0x82241AF2L, 0x82241B32L, 0x82241EB6L, 0x8224244EL, 0x82242762L, 0x82242B6AL
+	};
+	private static final long[] SCRIPT_LOW_PATCHES = {
+		0x82241AF6L, 0x82241B42L, 0x82241BE2L, 0x82241ECAL, 0x82241F72L,
+		0x8224202AL, 0x822420FAL, 0x8224212AL, 0x82242182L, 0x8224245EL,
+		0x82242486L, 0x8224276EL, 0x82242B7EL, 0x82242C52L
+	};
 	private static final byte[] FORCE_HOST_ONE_ON = {(byte) 0x48, 0, 1, 0x20};
 	private static final byte[] FORCE_HOST_TWO_ON = {(byte) 0x48, 0, 0, 0x3C};
 	private static final byte[] FORCE_HOST_ONE_OFF = {0x40, (byte) 0x99, 1, 0x20};
@@ -64,6 +82,7 @@ final class Mw2Adapter extends AbstractCodAdapter
 		new TextOption("clan", "Clan Tag", "Profile", 4, false),
 		new TextOption("client_name", "In-Game Name", "Selected Player", 15, true),
 		new TextOption("message", "Message", "Selected Player", 80, true));
+	private long scriptBuffer;
 
 	Mw2Adapter(ConsoleService console)
 	{
@@ -74,6 +93,53 @@ final class Mw2Adapter extends AbstractCodAdapter
 	public List<StatGroup> statGroups()
 	{
 		return STATS;
+	}
+
+	@Override
+	public boolean gscInjectionSupported()
+	{
+		return true;
+	}
+
+	@Override
+	protected void onInjectGsc(Path source)
+	{
+		Iw4GscProgram program = Iw4GscCompiler.compile(source);
+		byte[] bytecode = program.link(this::resolveScriptString);
+		PatchState patchState = scriptPatchState();
+		if (patchState == PatchState.PATCHED && scriptBuffer == 0)
+		{
+			throw new IllegalStateException("Another GSC injector is already active. Restart the game before injecting.");
+		}
+		if (patchState == PatchState.MIXED)
+		{
+			throw new IllegalStateException("The game script state is incomplete. Restart the game before injecting.");
+		}
+		if (patchState == PatchState.STOCK && readIntBig(SCRIPT_POINTER) != STOCK_SCRIPT_POINTER)
+		{
+			throw new IllegalStateException("Another GSC injector is already active. Restart the game before injecting.");
+		}
+		if (patchState == PatchState.PATCHED
+			&& Integer.toUnsignedLong(readIntBig(SCRIPT_POINTER)) != scriptBuffer)
+		{
+			throw new IllegalStateException("The game script state changed. Restart the game before injecting.");
+		}
+		if (scriptBuffer == 0)
+		{
+			scriptBuffer = allocate(SCRIPT_CAPACITY);
+		}
+		byte[] expanded = read(SCRIPT_IMAGE, SCRIPT_CAPACITY);
+		System.arraycopy(bytecode, 0, expanded, 0, bytecode.length);
+		write(scriptBuffer, expanded);
+		writeIntBig(SCRIPT_POINTER, scriptBuffer);
+		for (long address : SCRIPT_HIGH_PATCHES)
+		{
+			writeShortBig(address, SCRIPT_HIGH);
+		}
+		for (long address : SCRIPT_LOW_PATCHES)
+		{
+			writeShortBig(address, SCRIPT_LOW);
+		}
 	}
 
 	@Override
@@ -290,6 +356,47 @@ final class Mw2Adapter extends AbstractCodAdapter
 			String value = hex.formatHex(REPAIR_CLASS_NAMES[index].getBytes(StandardCharsets.US_ASCII));
 			call(SERVER_COMMAND, client, 1, "J " + REMOTE_CLASS_FIELDS[index] + " " + value + "00");
 		}
+	}
+
+	private int resolveScriptString(String value)
+	{
+		return (int) call(SCRIPT_STRING, value, 0) & 0xFFFF;
+	}
+
+	private PatchState scriptPatchState()
+	{
+		boolean stock = true;
+		boolean patched = true;
+		for (long address : SCRIPT_HIGH_PATCHES)
+		{
+			int value = readUnsignedShortBig(address);
+			stock &= value == 0x8250;
+			patched &= value == SCRIPT_HIGH;
+		}
+		for (long address : SCRIPT_LOW_PATCHES)
+		{
+			int value = readUnsignedShortBig(address);
+			stock &= value == 0xE71C;
+			patched &= value == SCRIPT_LOW;
+		}
+		if (stock)
+		{
+			return PatchState.STOCK;
+		}
+		return patched ? PatchState.PATCHED : PatchState.MIXED;
+	}
+
+	private int readUnsignedShortBig(long address)
+	{
+		byte[] value = read(address, 2);
+		return (value[0] & 0xFF) << 8 | value[1] & 0xFF;
+	}
+
+	private enum PatchState
+	{
+		STOCK,
+		PATCHED,
+		MIXED
 	}
 
 }

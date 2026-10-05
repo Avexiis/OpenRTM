@@ -5,6 +5,7 @@ import openrtm.console.ConsoleService;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -180,6 +181,13 @@ abstract class AbstractCodAdapter implements CodAdapter
 		onSetText(key, value == null ? "" : value, checkedClient(client));
 	}
 
+	@Override
+	public final void injectGsc(Path source)
+	{
+		requireTitle();
+		onInjectGsc(source);
+	}
+
 	protected Map<String, Long> onReadStats(String group)
 	{
 		throw unsupported("read stats");
@@ -239,6 +247,11 @@ abstract class AbstractCodAdapter implements CodAdapter
 		throw unknown(key);
 	}
 
+	protected void onInjectGsc(Path source)
+	{
+		throw unsupported("GSC injection");
+	}
+
 	protected final void command(long address, String command)
 	{
 		console.callTitleVoid(address, 0, command);
@@ -252,6 +265,11 @@ abstract class AbstractCodAdapter implements CodAdapter
 	protected final long call(long address, Object... arguments)
 	{
 		return console.callTitle(address, arguments);
+	}
+
+	protected final long allocate(int length)
+	{
+		return console.allocateTitleMemory(length);
 	}
 
 	protected final byte[] read(long address, int length)
