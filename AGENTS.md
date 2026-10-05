@@ -1,6 +1,6 @@
 ### General
 - Never leave your generated comments or Javadocs in the code. Leave existing comments, commented out code, and Javadocs alone unless the user requests removal. Java files, to you, are for code only. Comments, notes, and explanations should be placed in `docs/agent-notes`. Generate this folder if not present.
-- Only query the networked console when the user gives explicit permission with every new message/prompt.
+- Only query the networked console when the user gives explicit permission with every new message/prompt, unless it is an explicit continuation of an incomplete task.
 - Utilize the tool's debugger session for console events if the request involves fixing a console crash, or as-needed when it may be useful. Only do this when you are allowed by the user to connect to the networked console, as described earlier.
 - Never use wildcard imports (ie `java.awt.*`) and instead use single class imports.
 - Never use fully qualified paths inline unless there are conflict errors such as `java.awt.timer` and `javax.swing.timer` used in one class. Prefer imports.
