@@ -1,3 +1,12 @@
+isHost()
+{
+	if (self == level)
+	{
+		return true;
+	}
+	return self __openrtm_native_ishost();
+}
+
 transitionZoomIn(duration)
 {
 	if (self.elemType == "font" || self.elemType == "timer")

@@ -1,7 +1,10 @@
 package openrtm.cod;
 
+import com.jjrpc.JRPC;
+import openrtm.cod.gsc.GscProjectTitle;
 import openrtm.console.ConsoleService;
 
+import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -186,6 +189,15 @@ abstract class AbstractCodAdapter implements CodAdapter
 	{
 		requireTitle();
 		onInjectGsc(source);
+		try
+		{
+			console.xNotify("OpenRTM - " + GscProjectTitle.read(source) + " loaded", JRPC.XNotiyLogo.FLASHING_XBOX_CONSOLE);
+		}
+		catch (RuntimeException failure)
+		{
+			System.getLogger(AbstractCodAdapter.class.getName()).log(Level.WARNING,
+				"The menu was injected, but the console notification could not be sent", failure);
+		}
 	}
 
 	protected Map<String, Long> onReadStats(String group)

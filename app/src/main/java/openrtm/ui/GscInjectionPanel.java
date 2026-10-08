@@ -3,8 +3,6 @@ package openrtm.ui;
 import openrtm.cod.CodAdapter;
 
 import javax.swing.BorderFactory;
-import javax.swing.Box;
-import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
@@ -12,7 +10,6 @@ import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
-import java.awt.Component;
 import java.awt.FlowLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,26 +31,21 @@ final class GscInjectionPanel extends FileDropPanel
 		this.taskRunner = taskRunner;
 		setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
 		selectedPath.setEditable(false);
-		JPanel content = new JPanel();
-		content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
+		JPanel content = new JPanel(new BorderLayout(0, 12));
 		content.setBorder(BorderFactory.createTitledBorder("GSC Source"));
 		JPanel source = new JPanel(new BorderLayout(8, 0));
-		source.setAlignmentX(Component.LEFT_ALIGNMENT);
 		source.add(new JLabel("File or Project"), BorderLayout.WEST);
 		source.add(selectedPath, BorderLayout.CENTER);
 		JButton browse = new JButton("Browse");
 		browse.addActionListener(event -> browse());
 		source.add(browse, BorderLayout.EAST);
-		content.add(source);
-		content.add(Box.createVerticalStrut(12));
+		content.add(source, BorderLayout.NORTH);
 		JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-		actions.setAlignmentX(Component.LEFT_ALIGNMENT);
 		inject.setEnabled(false);
 		inject.addActionListener(event -> inject());
 		actions.add(inject);
-		content.add(actions);
-		content.add(Box.createVerticalGlue());
-		add(content, BorderLayout.CENTER);
+		content.add(actions, BorderLayout.SOUTH);
+		add(content, BorderLayout.NORTH);
 		enableFileDrop("Drop a GSC file or project folder", this::selectDropped);
 	}
 

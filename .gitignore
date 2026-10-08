@@ -34,3 +34,4 @@ bin/
 ### Mac OS ###
 .DS_Store
 /docs/agent-notes/
+/.agent-tmp/

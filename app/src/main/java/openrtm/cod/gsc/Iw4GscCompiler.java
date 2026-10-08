@@ -12,6 +12,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -35,6 +36,7 @@ public final class Iw4GscCompiler
 	private final Deque<Label> breaks = new ArrayDeque<>();
 	private final Deque<Label> continues = new ArrayDeque<>();
 	private final List<String> locals = new ArrayList<>();
+	private final Map<GscAst.Statement, List<String>> temporaryLocals = new HashMap<>();
 	private int generatedNames;
 
 	public static Iw4GscProgram compile(Path selected)
@@ -135,6 +137,7 @@ public final class Iw4GscCompiler
 	private void compileFunction(GscAst.Function sourceFunction)
 	{
 		locals.clear();
+		temporaryLocals.clear();
 		functions.get(normalize(sourceFunction.name())).position = output.size();
 		for (String parameter : sourceFunction.parameters())
 		{
@@ -142,6 +145,17 @@ public final class Iw4GscCompiler
 			locals.add(normalize(parameter));
 		}
 		emit(0x6C);
+		Set<String> declared = collectLocals(sourceFunction.body());
+		declared.removeAll(locals);
+		if (locals.size() + declared.size() > 256)
+		{
+			throw error(sourceFunction.token(), "Too many local variables in this function");
+		}
+		for (String name : declared)
+		{
+			emitToken(0x04, name);
+			locals.add(name);
+		}
 		compileBlock(sourceFunction.body());
 		emit(0x00);
 	}
@@ -297,9 +311,10 @@ public final class Iw4GscCompiler
 
 	private void compileForeach(GscAst.ForeachStatement loop)
 	{
-		String array = generated("array");
-		String key = loop.value() == null ? generated("key") : loop.variable();
-		String value = loop.value() == null ? loop.variable() : loop.value();
+		List<String> names = temporaryLocals.get(loop);
+		String array = names.get(0);
+		String key = names.get(1);
+		String value = names.get(2);
 		assignLocal(array, loop.array(), loop.token());
 		assignLocal(key, builtin("getfirstarraykey", List.of(new GscAst.Name(array, loop.token())), loop.token()), loop.token());
 		Label start = new Label();
@@ -324,8 +339,9 @@ public final class Iw4GscCompiler
 
 	private void compileSwitch(GscAst.SwitchStatement selection)
 	{
-		String value = generated("switch");
-		String matched = generated("matched");
+		List<String> names = temporaryLocals.get(selection);
+		String value = names.get(0);
+		String matched = names.get(1);
 		assignLocal(value, selection.expression(), selection.token());
 		assignLocal(matched, literal(0, selection.token()), selection.token());
 		Label end = new Label();
@@ -591,7 +607,12 @@ public final class Iw4GscCompiler
 
 	private void compileField(GscAst.Field field)
 	{
-		if (isName(field.target(), "level"))
+		if (field.name().equalsIgnoreCase("size"))
+		{
+			compileExpression(field.target());
+			emit(0x5A);
+		}
+		else if (isName(field.target(), "level"))
 		{
 			emitToken(0x5E, field.name());
 		}
@@ -688,7 +709,8 @@ public final class Iw4GscCompiler
 			emitScriptCall(call, null, stock);
 			return;
 		}
-		int builtin = call.receiver() == null ? Iw4GscTables.function(name) : Iw4GscTables.method(name);
+		int builtin = call.receiver() == null ? Iw4GscTables.function(name)
+			: Iw4GscTables.method(name.equals("__openrtm_native_ishost") ? "ishost" : name);
 		if (builtin < 0)
 		{
 			emitScriptCallArguments(call);
@@ -794,6 +816,7 @@ public final class Iw4GscCompiler
 		String name = normalize(call.name());
 		if (name.equals("notify"))
 		{
+			emit(0x4B);
 			for (int i = call.arguments().size() - 1; i >= 0; i--)
 			{
 				compileExpression(call.arguments().get(i));
@@ -808,7 +831,6 @@ public final class Iw4GscCompiler
 			compileExpression(call.arguments().get(0));
 			compileExpression(call.receiver());
 			emit(0x4A);
-			emit(0x4B);
 			return true;
 		}
 		if (name.equals("waittill"))
@@ -830,8 +852,7 @@ public final class Iw4GscCompiler
 				String value = normalize(local.value());
 				if (localIndex(value) < 0)
 				{
-					emitToken(0x04, value);
-					locals.add(value);
+					throw error(local.token(), "Unknown local variable '" + local.value() + "'");
 				}
 				emitByte(0x6A, localIndex(value));
 			}
@@ -867,8 +888,7 @@ public final class Iw4GscCompiler
 			int index = localIndex(value);
 			if (index < 0)
 			{
-				emitToken(0x75, value);
-				locals.add(value);
+				throw error(token, "Unknown local variable '" + name.value() + "'");
 			}
 			else if (index == 0)
 			{
@@ -876,7 +896,7 @@ public final class Iw4GscCompiler
 			}
 			else
 			{
-				emitByte(0x69, index);
+				emitByte(0x76, index);
 			}
 			return;
 		}
@@ -906,7 +926,7 @@ public final class Iw4GscCompiler
 		if (target instanceof GscAst.Index index)
 		{
 			compileExpression(index.index());
-			emitArrayReference(index.target(), index.token(), true);
+			emitArrayReference(index.target(), index.token());
 			emit(0x71);
 			return;
 		}
@@ -917,6 +937,11 @@ public final class Iw4GscCompiler
 	{
 		if (target instanceof GscAst.Name name)
 		{
+			if (isName(name, "game"))
+			{
+				emit(0x39);
+				return;
+			}
 			int index = localIndex(name.value());
 			if (index < 0)
 			{
@@ -957,29 +982,23 @@ public final class Iw4GscCompiler
 		if (target instanceof GscAst.Index index)
 		{
 			compileExpression(index.index());
-			emitArrayReference(index.target(), index.token(), false);
+			emitArrayReference(index.target(), index.token());
 			return;
 		}
 		throw error(token, "Invalid variable reference");
 	}
 
-	private void emitArrayReference(GscAst.Expression target, GscToken token, boolean create)
+	private void emitArrayReference(GscAst.Expression target, GscToken token)
 	{
 		if (target instanceof GscAst.Name name)
 		{
 			int index = localIndex(name.value());
 			if (index < 0)
 			{
-				if (isGlobalName(name.value()))
+				if (isName(name, "game"))
 				{
-					compileExpression(name);
+					emit(0x39);
 					emit(0x12);
-					return;
-				}
-				if (create)
-				{
-					emitToken(0x10, name.value());
-					locals.add(normalize(name.value()));
 					return;
 				}
 				throw error(token, "Unknown local variable '" + name.value() + "'");
@@ -995,7 +1014,7 @@ public final class Iw4GscCompiler
 		}
 		else
 		{
-			compileExpression(target);
+			emitReference(target, token);
 			emit(0x12);
 		}
 	}
@@ -1226,124 +1245,67 @@ public final class Iw4GscCompiler
 
 	private static void collectReferences(GscAst.Statement statement, Set<String> references)
 	{
-		if (statement instanceof GscAst.Block block)
-		{
-			for (GscAst.Statement child : block.statements())
-			{
-				collectReferences(child, references);
-			}
-		}
-		else if (statement instanceof GscAst.ExpressionStatement expression)
-		{
-			collectReferences(expression.expression(), references);
-		}
-		else if (statement instanceof GscAst.IfStatement conditional)
-		{
-			collectReferences(conditional.condition(), references);
-			collectReferences(conditional.thenBranch(), references);
-			if (conditional.elseBranch() != null)
-			{
-				collectReferences(conditional.elseBranch(), references);
-			}
-		}
-		else if (statement instanceof GscAst.WhileStatement loop)
-		{
-			collectReferences(loop.condition(), references);
-			collectReferences(loop.body(), references);
-		}
-		else if (statement instanceof GscAst.ForStatement loop)
-		{
-			collectReferences(loop.initializer(), references);
-			collectReferences(loop.condition(), references);
-			collectReferences(loop.iterator(), references);
-			collectReferences(loop.body(), references);
-		}
-		else if (statement instanceof GscAst.ForeachStatement loop)
-		{
-			collectReferences(loop.array(), references);
-			collectReferences(loop.body(), references);
-		}
-		else if (statement instanceof GscAst.SwitchStatement selection)
-		{
-			collectReferences(selection.expression(), references);
-			for (GscAst.SwitchCase choice : selection.cases())
-			{
-				collectReferences(choice.value(), references);
-				for (GscAst.Statement child : choice.statements())
-				{
-					collectReferences(child, references);
-				}
-			}
-		}
-		else if (statement instanceof GscAst.ReturnStatement returning)
-		{
-			collectReferences(returning.value(), references);
-		}
-		else if (statement instanceof GscAst.WaitStatement wait)
-		{
-			collectReferences(wait.value(), references);
-		}
-	}
-
-	private static void collectReferences(GscAst.Expression expression, Set<String> references)
-	{
-		if (expression == null)
-		{
-			return;
-		}
-		if (expression instanceof GscAst.ArrayLiteral array)
-		{
-			for (GscAst.Expression value : array.values())
-			{
-				collectReferences(value, references);
-			}
-		}
-		else if (expression instanceof GscAst.VectorLiteral vector)
-		{
-			collectReferences(vector.x(), references);
-			collectReferences(vector.y(), references);
-			collectReferences(vector.z(), references);
-		}
-		else if (expression instanceof GscAst.Unary unary)
-		{
-			collectReferences(unary.expression(), references);
-		}
-		else if (expression instanceof GscAst.Binary binary)
-		{
-			collectReferences(binary.left(), references);
-			collectReferences(binary.right(), references);
-		}
-		else if (expression instanceof GscAst.Assignment assignment)
-		{
-			collectReferences(assignment.target(), references);
-			collectReferences(assignment.value(), references);
-		}
-		else if (expression instanceof GscAst.Field field)
-		{
-			collectReferences(field.target(), references);
-		}
-		else if (expression instanceof GscAst.Index index)
-		{
-			collectReferences(index.target(), references);
-			collectReferences(index.index(), references);
-		}
-		else if (expression instanceof GscAst.Call call)
-		{
-			if (call.path().isEmpty() && !call.name().isEmpty())
+		GscAst.visit(statement, ignored -> {}, expression -> {
+			if (expression instanceof GscAst.Call call && call.path().isEmpty() && !call.name().isEmpty())
 			{
 				references.add(normalize(call.name()));
 			}
-			collectReferences(call.receiver(), references);
-			collectReferences(call.pointer(), references);
-			for (GscAst.Expression argument : call.arguments())
+			else if (expression instanceof GscAst.FunctionReference reference && reference.path().isEmpty())
 			{
-				collectReferences(argument, references);
+				references.add(normalize(reference.name()));
 			}
-		}
-		else if (expression instanceof GscAst.FunctionReference reference && reference.path().isEmpty())
-		{
-			references.add(normalize(reference.name()));
-		}
+		});
+	}
+
+	private Set<String> collectLocals(GscAst.Statement body)
+	{
+		Set<String> declared = new LinkedHashSet<>();
+		GscAst.visit(body, statement -> {
+			List<String> names;
+			if (statement instanceof GscAst.ForeachStatement loop)
+			{
+				names = List.of(generated("array"), loop.value() == null ? generated("key") : loop.variable(),
+					loop.value() == null ? loop.variable() : loop.value());
+			}
+			else if (statement instanceof GscAst.SwitchStatement)
+			{
+				names = List.of(generated("switch"), generated("matched"));
+			}
+			else
+			{
+				return;
+			}
+			temporaryLocals.put(statement, names);
+			for (String name : names)
+			{
+				declared.add(normalize(name));
+			}
+		}, expression -> {
+			if (expression instanceof GscAst.Assignment assignment)
+			{
+				GscAst.Expression target = assignment.target();
+				while (target instanceof GscAst.Index index)
+				{
+					target = index.target();
+				}
+				if (target instanceof GscAst.Name name && !isGlobalName(name.value()))
+				{
+					declared.add(normalize(name.value()));
+				}
+			}
+			else if (expression instanceof GscAst.Call call && call.receiver() != null && call.path().isEmpty()
+				&& call.pointer() == null && !threaded(call) && normalize(call.name()).equals("waittill"))
+			{
+				for (int index = 1; index < call.arguments().size(); index++)
+				{
+					if (call.arguments().get(index) instanceof GscAst.Name name)
+					{
+						declared.add(normalize(name.value()));
+					}
+				}
+			}
+		});
+		return declared;
 	}
 
 	private static Map<String, Integer> loadCalls(String resource)
