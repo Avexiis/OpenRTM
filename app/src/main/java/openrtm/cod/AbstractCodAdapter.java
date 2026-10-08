@@ -272,9 +272,19 @@ abstract class AbstractCodAdapter implements CodAdapter
 		return console.allocateTitleMemory(length);
 	}
 
+	protected final void free(long address)
+	{
+		console.freeTitleMemory(address);
+	}
+
 	protected final byte[] read(long address, int length)
 	{
 		return console.readMemory(address, length);
+	}
+
+	protected final void flushInstructionCache(long address, int length)
+	{
+		console.flushInstructionCache(address, length);
 	}
 
 	protected final int readIntLittle(long address)

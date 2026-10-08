@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -23,6 +24,9 @@ import java.util.function.LongConsumer;
 
 public final class JRPC
 {
+	private static final int CALL_POLL_DELAY_MS = 10;
+	private static final int CALL_POLL_LIMIT = 3000;
+
 	public static class ComException extends RuntimeException
 	{
 		private final int errorCode;
@@ -937,26 +941,40 @@ public final class JRPC
 			@Override
 			public void SetMemory(long address, long length, byte[] data, long[] outWritten)
 			{
+				if (length < 0 || length > data.length || address < 0 || address > 0xFFFFFFFFL
+					|| length > 0x100000000L - address)
+				{
+					throw new IllegalArgumentException("Invalid memory write range");
+				}
 				ensureConnected();
+				int written = 0;
+				if (outWritten != null && outWritten.length > 0)
+				{
+					outWritten[0] = 0;
+				}
 				try
 				{
-					int n = (int) Math.min(length, data.length);
-					StringBuilder hex = new StringBuilder(n * 2);
-					for (int i = 0; i < n; i++)
+					while (written < length)
 					{
-						hex.append(String.format("%02X", data[i]));
-					}
-					writeLine("setmem addr=0x" + Long.toHexString(address).toUpperCase(Locale.ROOT) + " data=" + hex);
-					try
-					{
-						readAsciiLine();
-					}
-					catch (IOException ignored)
-					{
-					}
-					if (outWritten != null && outWritten.length > 0)
-					{
-						outWritten[0] = n;
+						int count = (int) Math.min(192, length - written);
+						String hex = HexFormat.of().withUpperCase().formatHex(data, written, written + count);
+						writeLine("setmem addr=0x" + Long.toHexString(address + written).toUpperCase(Locale.ROOT)
+							+ " data=" + hex);
+						String response = readAsciiLine();
+						if (statusCode(response) != 200)
+						{
+							throw new IOException("Console rejected memory write: " + response);
+						}
+						String reported = extractField(response, "written=");
+						if (!reported.isEmpty() && Long.decode(reported) != count)
+						{
+							throw new IOException("Console reported an incomplete memory write: " + response);
+						}
+						written += count;
+						if (outWritten != null && outWritten.length > 0)
+						{
+							outWritten[0] = written;
+						}
 					}
 				}
 				catch (IOException e)
@@ -2229,35 +2247,53 @@ public final class JRPC
 
 		String resp = SendCommand(c, startCmd);
 		String findStr = "buf_addr=";
+		int polls = 0;
 		while (resp.contains(findStr))
 		{
-			try
-			{
-				Thread.sleep(250);
-			}
-			catch (InterruptedException ignored)
-			{
-			}
 			int idx = find(resp, findStr);
 			String sub = resp.substring(idx + findStr.length());
 			long address = Long.parseLong(sub, 16);
-			resp = SendCommand(c, "consolefeatures " + findStr + "0x" + Long.toHexString(address).toUpperCase());
+			String pollCommand = "consolefeatures " + findStr + "0x" + Long.toHexString(address).toUpperCase();
+			do
+			{
+				try
+				{
+					Thread.sleep(CALL_POLL_DELAY_MS);
+				}
+				catch (InterruptedException failure)
+				{
+					Thread.currentThread().interrupt();
+					throw new RuntimeException("The remote call was interrupted", failure);
+				}
+				resp = SendCommand(c, pollCommand);
+				polls++;
+				if (polls >= CALL_POLL_LIMIT)
+				{
+					throw new RuntimeException("The console did not finish the remote call");
+				}
+			}
+			while (type != RET_VOID && type != RET_STRING && responseValue(resp).isBlank());
 		}
 		c.setConversationTimeout(2000);
 		c.setConnectTimeout(5000);
+		String value = responseValue(resp);
+		if (type != RET_VOID && type != RET_STRING && value.isBlank())
+		{
+			throw new RuntimeException("The console stopped responding during the operation. Reconnect and try again.");
+		}
 
 		if (type == RET_INT)
 		{
-			long uVal = Long.parseLong(resp.substring(find(resp, " ") + 1), 16);
+			long uVal = Long.parseLong(value, 16);
 			return uVal;
 		}
 		else if (type == RET_STRING)
 		{
-			return resp.substring(find(resp, " ") + 1);
+			return value;
 		}
 		else if (type == RET_FLOAT)
 		{
-			String v = resp.substring(find(resp, " ") + 1);
+			String v = value;
 			try
 			{
 				if (v.contains(".") || v.contains("e") || v.contains("E"))
@@ -2276,18 +2312,18 @@ public final class JRPC
 		}
 		else if (type == RET_BYTE)
 		{
-			int bVal = Integer.parseInt(resp.substring(find(resp, " ") + 1), 16);
+			int bVal = Integer.parseInt(value, 16);
 			return (byte) (bVal & 0xFF);
 		}
 		else if (type == RET_UINT64)
 		{
-			String v = resp.substring(find(resp, " ") + 1);
+			String v = value;
 			return Long.parseLong(v, 16);
 		}
 
 		if (type == RET_INT_ARRAY)
 		{
-			String s = resp.substring(find(resp, " ") + 1);
+			String s = value;
 			int tmp = 0;
 			String temp = "";
 			long[] arr = new long[8];
@@ -2316,7 +2352,7 @@ public final class JRPC
 
 		if (type == RET_FLOAT_ARRAY)
 		{
-			String s = resp.substring(find(resp, " ") + 1);
+			String s = value;
 			int tmp = 0;
 			String temp = "";
 			float[] arr = new float[(int) arraySize];
@@ -2345,7 +2381,7 @@ public final class JRPC
 
 		if (type == RET_BYTE_ARRAY)
 		{
-			String s = resp.substring(find(resp, " ") + 1);
+			String s = value;
 			int tmp = 0;
 			String temp = "";
 			byte[] arr = new byte[(int) arraySize];
@@ -2374,7 +2410,7 @@ public final class JRPC
 
 		if (type == RET_UINT64_ARRAY)
 		{
-			String s = resp.substring(find(resp, " ") + 1);
+			String s = value;
 			int tmp = 0;
 			String temp = "";
 			long[] arr = new long[(int) arraySize];
@@ -2405,7 +2441,13 @@ public final class JRPC
 		{
 			return 0;
 		}
-		return Long.parseLong(resp.substring(find(resp, " ") + 1), 16);
+		return Long.parseLong(value, 16);
+	}
+
+	private static String responseValue(String response)
+	{
+		int separator = response.indexOf(' ');
+		return separator < 0 ? response : response.substring(separator + 1);
 	}
 
 	public static String ExecRaw(IXboxConsole c, String cmd)

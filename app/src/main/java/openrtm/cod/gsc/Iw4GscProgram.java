@@ -1,8 +1,11 @@
 package openrtm.cod.gsc;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.function.ToIntFunction;
+import java.util.Map;
 
 public final class Iw4GscProgram
 {
@@ -24,19 +27,43 @@ public final class Iw4GscProgram
 		return bytecode.length;
 	}
 
-	public byte[] link(ToIntFunction<String> stringResolver)
+	public byte[] bytecode()
 	{
-		byte[] linked = Arrays.copyOf(bytecode, bytecode.length);
+		return Arrays.copyOf(bytecode, bytecode.length);
+	}
+
+	public byte[] stringTable(long tableAddress, long codeAddress)
+	{
+		Map<String, Integer> offsets = new LinkedHashMap<>();
+		int length = 4 + strings.size() * 8;
 		for (StringReference reference : strings)
 		{
-			int value = stringResolver.applyAsInt(reference.value());
-			if (value < 0 || value > 0xFFFF)
+			if (!offsets.containsKey(reference.value()))
 			{
-				throw new IllegalStateException("The game rejected a script string");
+				offsets.put(reference.value(), length);
+				length = Math.addExact(length, reference.value().length() + 1);
 			}
-			linked[reference.offset()] = (byte) (value >>> 8);
-			linked[reference.offset() + 1] = (byte) value;
 		}
-		return linked;
+		ByteBuffer table = ByteBuffer.allocate(length).order(ByteOrder.BIG_ENDIAN);
+		table.putInt(strings.size());
+		for (StringReference reference : strings)
+		{
+			table.putInt((int) (codeAddress + reference.offset()));
+			table.putInt((int) (tableAddress + offsets.get(reference.value())));
+		}
+		for (String value : offsets.keySet())
+		{
+			for (int index = 0; index < value.length(); index++)
+			{
+				char character = value.charAt(index);
+				if (character == 0 || character > 255)
+				{
+					throw new IllegalArgumentException("A script string contains an unsupported character");
+				}
+				table.put((byte) character);
+			}
+			table.put((byte) 0);
+		}
+		return table.array();
 	}
 }

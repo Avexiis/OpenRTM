@@ -3,11 +3,17 @@ package openrtm.cod;
 import openrtm.cod.gsc.Iw4GscCompiler;
 import openrtm.cod.gsc.Iw4GscProgram;
 import openrtm.console.ConsoleService;
+import openrtm.console.DebuggerService;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,8 +34,15 @@ final class Mw2Adapter extends AbstractCodAdapter
 	private static final long ENTITY_SIZE = 640L;
 	private static final long SCRIPT_IMAGE = 0x82500500L;
 	private static final long SCRIPT_POINTER = 0x823D2DE8L;
-	private static final long SCRIPT_STRING = 0x82242250L;
-	private static final int SCRIPT_CAPACITY = 0x37FFF;
+	private static final long SCRIPT_LOCK = 0x838685ACL;
+	private static final long SCRIPT_LOAD_HOOK = 0x82249D78L;
+	private static final long SCRIPT_HOOK_CAVE = 0x823C76D0L;
+	private static final long SCRIPT_HOOK_STATE = 0x823C7900L;
+	private static final long SCRIPT_RESUME_PATCH = 0x8224FE64L;
+	private static final long SCRIPT_REDIRECT_START = 0x82241AF0L;
+	private static final int SCRIPT_POOL_SIZE = 0x38008;
+	private static final int SCRIPT_ALLOCATION_SIZE = 0x40000;
+	private static final int SCRIPT_REDIRECT_LENGTH = 0x1164;
 	private static final int STOCK_SCRIPT_POINTER = 0x823A3510;
 	private static final int SCRIPT_HIGH = 0x823D;
 	private static final int SCRIPT_LOW = 0x2DE8;
@@ -41,6 +54,21 @@ final class Mw2Adapter extends AbstractCodAdapter
 		0x8224202AL, 0x822420FAL, 0x8224212AL, 0x82242182L, 0x8224245EL,
 		0x82242486L, 0x8224276EL, 0x82242B7EL, 0x82242C52L
 	};
+	private static final byte[] SCRIPT_LOAD_HOOK_STOCK = HexFormat.of().parseHex(
+		"3D60835B394B7C58906A00104E800020");
+	private static final byte[] SCRIPT_HOOK_HANDLER = HexFormat.of().parseHex(
+		"7D8802A69181FFF8FBA1FFE0FBC1FFE8FBE1FFF09421FF707C7F1B783D60823C"
+			+ "2C1F00004182008439400001914B790439400000914B790883CB790083BE0000"
+			+ "3BDE00042C1D000041820040807E0004388000003D808224618C22507D8903A6"
+			+ "4E8004212C03000041820030817E00007D4B1850B14B00003BDE00083BBDFFFF"
+			+ "2C1D00004082FFC83D60823C39400002914B7904480000683D60823C3940FFFF"
+			+ "914B790448000058814B79042C0A00024082004C39400003914B79043C600006"
+			+ "6063A280388000003D808225618C02707D8903A64E8004213D60823C906B7908"
+			+ "3D808224618CB2107D8903A64E8004213D60823C39400004914B79043D60835B"
+			+ "93EB7C6838210090EBA1FFE0EBC1FFE8EBE1FFF08181FFF87D8803A64E800020");
+	private static final byte[] SCRIPT_HOOK_CAVE_STOCK = new byte[SCRIPT_HOOK_HANDLER.length];
+	private static final byte[] SCRIPT_RESUME_STOCK = HexFormat.of().parseHex("3D60835D396B8D7C");
+	private static final byte[] SCRIPT_RESUME_ENABLED = HexFormat.of().parseHex("6000000060000000");
 	private static final byte[] FORCE_HOST_ONE_ON = {(byte) 0x48, 0, 1, 0x20};
 	private static final byte[] FORCE_HOST_TWO_ON = {(byte) 0x48, 0, 0, 0x3C};
 	private static final byte[] FORCE_HOST_ONE_OFF = {0x40, (byte) 0x99, 1, 0x20};
@@ -83,10 +111,14 @@ final class Mw2Adapter extends AbstractCodAdapter
 		new TextOption("client_name", "In-Game Name", "Selected Player", 15, true),
 		new TextOption("message", "Message", "Selected Player", 80, true));
 	private long scriptBuffer;
+	private long scriptHookBuffer;
+	private long scriptStringBuffer;
+	private final DebuggerService debugger;
 
 	Mw2Adapter(ConsoleService console)
 	{
 		super(console, CodGame.MW2);
+		debugger = console.debugger();
 	}
 
 	@Override
@@ -105,9 +137,13 @@ final class Mw2Adapter extends AbstractCodAdapter
 	protected void onInjectGsc(Path source)
 	{
 		Iw4GscProgram program = Iw4GscCompiler.compile(source);
-		byte[] bytecode = program.link(this::resolveScriptString);
 		PatchState patchState = scriptPatchState();
-		if (patchState == PatchState.PATCHED && scriptBuffer == 0)
+		PatchState hookState = scriptHookState();
+		if (patchState != hookState)
+		{
+			throw new IllegalStateException("The game script state is incomplete. Restart the game before injecting.");
+		}
+		if (patchState == PatchState.PATCHED && (scriptBuffer == 0 || scriptHookBuffer == 0))
 		{
 			throw new IllegalStateException("Another GSC injector is already active. Restart the game before injecting.");
 		}
@@ -124,22 +160,191 @@ final class Mw2Adapter extends AbstractCodAdapter
 		{
 			throw new IllegalStateException("The game script state changed. Restart the game before injecting.");
 		}
-		if (scriptBuffer == 0)
+		if (patchState == PatchState.STOCK)
 		{
-			scriptBuffer = allocate(SCRIPT_CAPACITY);
+			scriptBuffer = 0;
+			scriptHookBuffer = 0;
+			scriptStringBuffer = 0;
 		}
-		byte[] expanded = read(SCRIPT_IMAGE, SCRIPT_CAPACITY);
-		System.arraycopy(bytecode, 0, expanded, 0, bytecode.length);
-		write(scriptBuffer, expanded);
-		writeIntBig(SCRIPT_POINTER, scriptBuffer);
-		for (long address : SCRIPT_HIGH_PATCHES)
+		byte[] bytecode = program.bytecode();
+		int tableLength = program.stringTable(0, SCRIPT_IMAGE).length;
+		long previousTable = scriptStringBuffer;
+		long nextTable = allocate(tableLength);
+		long nextPool = 0;
+		boolean published = false;
+		try
 		{
-			writeShortBig(address, SCRIPT_HIGH);
+			byte[] table = program.stringTable(nextTable, SCRIPT_IMAGE);
+			write(nextTable, table);
+			if (!Arrays.equals(read(nextTable, table.length), table))
+			{
+				throw new IllegalStateException("The GSC upload could not be verified. Try injecting again.");
+			}
+			if (patchState == PatchState.STOCK)
+			{
+				nextPool = allocate(SCRIPT_ALLOCATION_SIZE);
+			}
+			published = true;
+			installScript(patchState, nextPool, nextTable, bytecode);
+			if (patchState == PatchState.STOCK)
+			{
+				scriptBuffer = nextPool;
+				scriptHookBuffer = SCRIPT_HOOK_CAVE;
+			}
+			scriptStringBuffer = nextTable;
 		}
-		for (long address : SCRIPT_LOW_PATCHES)
+		catch (RuntimeException failure)
 		{
-			writeShortBig(address, SCRIPT_LOW);
+			if (!published)
+			{
+				try
+				{
+					free(nextTable);
+					if (nextPool != 0)
+					{
+						free(nextPool);
+					}
+				}
+				catch (RuntimeException cleanupFailure)
+				{
+					failure.addSuppressed(cleanupFailure);
+				}
+			}
+			throw failure;
 		}
+		if (previousTable != 0)
+		{
+			free(previousTable);
+		}
+	}
+
+	private void installScript(PatchState patchState, long poolAddress, long tableAddress, byte[] bytecode)
+	{
+		boolean attachedHere = false;
+		boolean paused = false;
+		boolean canResume = true;
+		Map<Long, byte[]> backup = new LinkedHashMap<>();
+		try
+		{
+			if (!debugger.attached())
+			{
+				debugger.attach(false);
+				attachedHere = true;
+			}
+			if (debugger.executionState() != DebuggerService.ExecutionState.RUNNING)
+			{
+				throw new IllegalStateException("Resume the game before injecting.");
+			}
+			debugger.pause();
+			paused = true;
+			if (debugger.executionState() != DebuggerService.ExecutionState.STOPPED
+				|| readIntBig(SCRIPT_LOCK + 0x14) != 0 || readIntBig(SCRIPT_LOCK + 0x18) != 0)
+			{
+				throw new IllegalStateException("The game is busy. Wait in the lobby and try injecting again.");
+			}
+			backup.put(SCRIPT_IMAGE, read(SCRIPT_IMAGE, patchState == PatchState.STOCK ? SCRIPT_POOL_SIZE : bytecode.length));
+			backup.put(SCRIPT_POINTER, read(SCRIPT_POINTER, 4));
+			backup.put(SCRIPT_HOOK_CAVE, read(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_HANDLER.length));
+			backup.put(SCRIPT_HOOK_STATE, read(SCRIPT_HOOK_STATE, 12));
+			backup.put(SCRIPT_LOAD_HOOK, read(SCRIPT_LOAD_HOOK, SCRIPT_LOAD_HOOK_STOCK.length));
+			backup.put(SCRIPT_RESUME_PATCH, read(SCRIPT_RESUME_PATCH, SCRIPT_RESUME_STOCK.length));
+			for (long address : SCRIPT_HIGH_PATCHES)
+			{
+				backup.put(address, read(address, 2));
+			}
+			for (long address : SCRIPT_LOW_PATCHES)
+			{
+				backup.put(address, read(address, 2));
+			}
+			if (patchState == PatchState.STOCK)
+			{
+				byte[] pool = Arrays.copyOf(backup.get(SCRIPT_IMAGE), SCRIPT_POOL_SIZE);
+				ByteBuffer poolData = ByteBuffer.wrap(pool).order(ByteOrder.BIG_ENDIAN);
+				long marker = Integer.toUnsignedLong(poolData.getInt(0x38004));
+				if (marker >= SCRIPT_IMAGE && marker < SCRIPT_IMAGE + 0x38000)
+				{
+					poolData.putInt(0x38004, (int) (poolAddress + marker - SCRIPT_IMAGE));
+				}
+				writeVerified(poolAddress, pool);
+			}
+			try
+			{
+				writeVerified(SCRIPT_HOOK_STATE, ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
+					.putInt((int) tableAddress).putInt(0).putInt(0).array());
+				if (patchState == PatchState.STOCK)
+				{
+					writeVerified(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_HANDLER);
+					writeIntBig(SCRIPT_POINTER, poolAddress);
+					for (long address : SCRIPT_HIGH_PATCHES)
+					{
+						writeShortBig(address, SCRIPT_HIGH);
+					}
+					for (long address : SCRIPT_LOW_PATCHES)
+					{
+						writeShortBig(address, SCRIPT_LOW);
+					}
+					writeVerified(SCRIPT_RESUME_PATCH, SCRIPT_RESUME_ENABLED);
+					if (scriptPatchState() != PatchState.PATCHED
+						|| Integer.toUnsignedLong(readIntBig(SCRIPT_POINTER)) != poolAddress)
+					{
+						throw new IllegalStateException("The GSC upload could not be verified.");
+					}
+				}
+				writeVerified(SCRIPT_IMAGE, bytecode);
+				writeVerified(SCRIPT_LOAD_HOOK, scriptLoadHook());
+				flushScriptCaches();
+			}
+			catch (RuntimeException failure)
+			{
+				try
+				{
+					for (Map.Entry<Long, byte[]> entry : backup.entrySet())
+					{
+						writeVerified(entry.getKey(), entry.getValue());
+					}
+					flushScriptCaches();
+				}
+				catch (RuntimeException restoreFailure)
+				{
+					canResume = false;
+					failure.addSuppressed(restoreFailure);
+					throw new IllegalStateException("The game could not be restored and remains paused. Restart the game.", failure);
+				}
+				throw failure;
+			}
+		}
+		catch (IOException failure)
+		{
+			throw new IllegalStateException("Could not attach to the console debugger for injection.", failure);
+		}
+		finally
+		{
+			if (paused && canResume)
+			{
+				debugger.resume();
+			}
+			if (attachedHere && canResume)
+			{
+				debugger.detach();
+			}
+		}
+	}
+
+	private void writeVerified(long address, byte[] data)
+	{
+		write(address, data);
+		if (!Arrays.equals(read(address, data.length), data))
+		{
+			throw new IllegalStateException("The GSC upload could not be verified.");
+		}
+	}
+
+	private void flushScriptCaches()
+	{
+		flushInstructionCache(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_HANDLER.length);
+		flushInstructionCache(SCRIPT_REDIRECT_START, SCRIPT_REDIRECT_LENGTH);
+		flushInstructionCache(SCRIPT_RESUME_PATCH, SCRIPT_RESUME_ENABLED.length);
+		flushInstructionCache(SCRIPT_LOAD_HOOK, SCRIPT_LOAD_HOOK_STOCK.length);
 	}
 
 	@Override
@@ -358,15 +563,11 @@ final class Mw2Adapter extends AbstractCodAdapter
 		}
 	}
 
-	private int resolveScriptString(String value)
-	{
-		return (int) call(SCRIPT_STRING, value, 0) & 0xFFFF;
-	}
-
 	private PatchState scriptPatchState()
 	{
-		boolean stock = true;
-		boolean patched = true;
+		byte[] resume = read(SCRIPT_RESUME_PATCH, SCRIPT_RESUME_STOCK.length);
+		boolean stock = Arrays.equals(resume, SCRIPT_RESUME_STOCK);
+		boolean patched = Arrays.equals(resume, SCRIPT_RESUME_ENABLED);
 		for (long address : SCRIPT_HIGH_PATCHES)
 		{
 			int value = readUnsignedShortBig(address);
@@ -384,6 +585,33 @@ final class Mw2Adapter extends AbstractCodAdapter
 			return PatchState.STOCK;
 		}
 		return patched ? PatchState.PATCHED : PatchState.MIXED;
+	}
+
+	private PatchState scriptHookState()
+	{
+		byte[] hook = read(SCRIPT_LOAD_HOOK, SCRIPT_LOAD_HOOK_STOCK.length);
+		byte[] cave = read(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_CAVE_STOCK.length);
+		if (Arrays.equals(hook, SCRIPT_LOAD_HOOK_STOCK) && Arrays.equals(cave, SCRIPT_HOOK_CAVE_STOCK))
+		{
+			return PatchState.STOCK;
+		}
+		if (scriptHookBuffer == SCRIPT_HOOK_CAVE && Arrays.equals(hook, scriptLoadHook())
+			&& Arrays.equals(cave, SCRIPT_HOOK_HANDLER))
+		{
+			return PatchState.PATCHED;
+		}
+		return PatchState.MIXED;
+	}
+
+	private byte[] scriptLoadHook()
+	{
+		int address = (int) SCRIPT_HOOK_CAVE;
+		return ByteBuffer.allocate(SCRIPT_LOAD_HOOK_STOCK.length).order(ByteOrder.BIG_ENDIAN)
+			.putInt(0x3D600000 | address >>> 16 & 0xFFFF)
+			.putInt(0x616B0000 | address & 0xFFFF)
+			.putInt(0x7D6903A6)
+			.putInt(0x4E800420)
+			.array();
 	}
 
 	private int readUnsignedShortBig(long address)

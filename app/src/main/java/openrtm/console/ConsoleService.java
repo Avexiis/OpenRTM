@@ -561,6 +561,15 @@ public final class ConsoleService
 		JRPC.SetMemory(requireConsole(), address, data);
 	}
 
+	public synchronized void flushInstructionCache(long address, int length)
+	{
+		if (length <= 0)
+		{
+			throw new IllegalArgumentException("Cache range length must be positive");
+		}
+		JRPC.CallVoid(requireConsole(), "xboxkrnl.exe", 0xAB, address, length);
+	}
+
 	public synchronized void writeByte(long address, int value)
 	{
 		JRPC.WriteByte(requireConsole(), address, (byte) value);
@@ -602,13 +611,59 @@ public final class ConsoleService
 		{
 			throw new IllegalArgumentException("Allocation length must be positive");
 		}
-		long address = JRPC.Call(requireConsole(), JRPC.ThreadType.Title, "xam.xex", 1161, length, 0);
-		address &= 0xFFFFFFFFL;
-		if (address == 0)
+		JRPC.IXboxConsole target = requireConsole();
+		long control = JRPC.<Long>Call(target, JRPC.ThreadType.Title, "xam.xex", 1161, 8, 0) & 0xFFFFFFFFL;
+		if (control == 0)
 		{
 			throw new IllegalStateException("The console could not reserve enough memory");
 		}
-		return address;
+		try
+		{
+			writeMemory(control, ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
+				.putInt(0).putInt(length).array());
+			long status = JRPC.Call(target, JRPC.ThreadType.Title, "xboxkrnl.exe", 0xCC,
+				control, control + 4, 0x3000, 4, 1);
+			long address = Integer.toUnsignedLong(ByteBuffer.wrap(readMemory(control, 4))
+				.order(ByteOrder.BIG_ENDIAN).getInt());
+			if ((int) status < 0 || address == 0)
+			{
+				throw new IllegalStateException("The console could not reserve enough memory");
+			}
+			return address;
+		}
+		finally
+		{
+			JRPC.CallVoid(target, JRPC.ThreadType.Title, "xam.xex", 1162, control);
+		}
+	}
+
+	public synchronized void freeTitleMemory(long address)
+	{
+		if (address <= 0 || address > 0xFFFFFFFFL)
+		{
+			throw new IllegalArgumentException("Invalid allocation address");
+		}
+		JRPC.IXboxConsole target = requireConsole();
+		long control = JRPC.<Long>Call(target, JRPC.ThreadType.Title, "xam.xex", 1161, 8, 0) & 0xFFFFFFFFL;
+		if (control == 0)
+		{
+			throw new IllegalStateException("The console could not release the reserved memory");
+		}
+		try
+		{
+			writeMemory(control, ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
+				.putInt((int) address).putInt(0).array());
+			long status = JRPC.Call(target, JRPC.ThreadType.Title, "xboxkrnl.exe", 0xDC,
+				control, control + 4, 0x8000, 1);
+			if ((int) status < 0)
+			{
+				throw new IllegalStateException("The console could not release the reserved memory");
+			}
+		}
+		finally
+		{
+			JRPC.CallVoid(target, JRPC.ThreadType.Title, "xam.xex", 1162, control);
+		}
 	}
 
 	public synchronized void writeAsciiNull(long address, String value)

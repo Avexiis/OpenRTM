@@ -22,10 +22,12 @@ import java.util.stream.Stream;
 public final class Iw4GscCompiler
 {
 	private static final int MAXIMUM_SIZE = 0x37FFF;
-	private static final int LOCAL_CALL_BASE = 0x7DAFFB;
+	private static final int CODE_ADDRESS = 0x82500500;
+	private static final String STANDARD_LIBRARY = "/openrtm/cod/iw4-standard-library.gsc";
 	private final Writer output = new Writer();
 	private final Map<String, Label> functions = new LinkedHashMap<>();
 	private final List<CallFixup> calls = new ArrayList<>();
+	private final Map<Integer, Label> callTrampolines = new LinkedHashMap<>();
 	private final Map<String, Integer> customTokens = new LinkedHashMap<>();
 	private final Map<String, Integer> farCalls = loadCalls("/openrtm/cod/iw4-far-calls.tsv");
 	private final Map<String, Integer> stockCalls = loadCalls("/openrtm/cod/iw4-stock-calls.tsv");
@@ -58,6 +60,16 @@ public final class Iw4GscCompiler
 			catch (IOException failure)
 			{
 				throw new IllegalArgumentException("Unable to read " + file.getFileName(), failure);
+			}
+		}
+		Set<String> sourceNames = functions.stream()
+			.map(function -> normalize(function.name()))
+			.collect(Collectors.toSet());
+		for (GscAst.Function function : standardFunctions())
+		{
+			if (!sourceNames.contains(normalize(function.name())))
+			{
+				functions.add(function);
 			}
 		}
 		return new Iw4GscCompiler().compileFunctions(functions);
@@ -97,14 +109,20 @@ public final class Iw4GscCompiler
 		{
 			compileFunction(sourceFunction);
 		}
+		for (Map.Entry<Integer, Label> entry : callTrampolines.entrySet())
+		{
+			mark(entry.getValue());
+			emit(0x54);
+			output.alignOperand(4);
+			output.writeInt(entry.getKey() - CODE_ADDRESS - output.size() - 4);
+		}
 		for (CallFixup fixup : calls)
 		{
 			if (fixup.target().position < 0)
 			{
 				throw new IllegalStateException("A script function was not emitted");
 			}
-			int distance = fixup.target().position - fixup.instruction() - 1;
-			int encoded = LOCAL_CALL_BASE + distance * 16;
+			int encoded = encodeCall(CODE_ADDRESS + fixup.target().position, fixup.operand());
 			output.patch24(fixup.operand(), encoded);
 		}
 		if (output.size() > MAXIMUM_SIZE)
@@ -1052,6 +1070,7 @@ public final class Iw4GscCompiler
 	private void emitString(int opcode, String value)
 	{
 		emit(opcode);
+		output.alignOperand(2);
 		int offset = output.size();
 		output.writeShort(0);
 		strings.add(new Iw4GscProgram.StringReference(offset, value));
@@ -1084,6 +1103,7 @@ public final class Iw4GscCompiler
 	{
 		int instruction = output.size();
 		emit(opcode);
+		output.alignOperand(width);
 		int operand = output.size();
 		if (width == 2)
 		{
@@ -1106,9 +1126,9 @@ public final class Iw4GscCompiler
 		{
 			throw new IllegalStateException("A loop target was not emitted");
 		}
-		int instruction = output.size();
 		emit(0x46);
-		output.writeShort(instruction + 3 - target.position);
+		output.alignOperand(2);
+		output.writeShort(output.size() + 2 - target.position);
 	}
 
 	private void mark(Label label)
@@ -1127,7 +1147,7 @@ public final class Iw4GscCompiler
 
 	private void patchJump(Label label, JumpFixup jump)
 	{
-		int distance = label.position - jump.instruction() - (jump.relativeToThree() ? 3 : 5);
+		int distance = label.position - jump.operand() - jump.width();
 		if (jump.width() == 2)
 		{
 			if (distance < Short.MIN_VALUE || distance > Short.MAX_VALUE)
@@ -1352,13 +1372,52 @@ public final class Iw4GscCompiler
 		return Map.copyOf(values);
 	}
 
-	private static int relocateCall(int canonical, int instruction)
+	private static List<GscAst.Function> standardFunctions()
+	{
+		InputStream input = Iw4GscCompiler.class.getResourceAsStream(STANDARD_LIBRARY);
+		if (input == null)
+		{
+			throw new ExceptionInInitializerError("Missing GSC standard library");
+		}
+		try (input)
+		{
+			String source = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+			return new GscParser(new GscLexer(source, "standard library").lex()).parse().functions();
+		}
+		catch (IOException failure)
+		{
+			throw new IllegalStateException("Unable to read the GSC standard library", failure);
+		}
+	}
+
+	private int relocateCall(int canonical, int instruction)
 	{
 		if (canonical == 0xF1F1F1)
 		{
 			return canonical;
 		}
-		return canonical - (instruction - 1) * 16 & 0xFFFFFF;
+		int originalAddress = CODE_ADDRESS + 2;
+		int target = originalAddress + (((canonical << 8) + originalAddress) >> 12);
+		int distance = target - CODE_ADDRESS - instruction - 1;
+		if (distance < -0x80000 || distance > 0x7FFFF)
+		{
+			Label trampoline = callTrampolines.computeIfAbsent(target, ignored -> new Label());
+			calls.add(new CallFixup(trampoline, instruction, instruction + 1));
+			return 0;
+		}
+		return encodeCall(target, instruction + 1);
+	}
+
+	private static int encodeCall(int target, int operand)
+	{
+		int address = CODE_ADDRESS + operand;
+		int distance = target - address;
+		int encoded = (((distance << 12) - address + 255) >>> 8) & 0xFFFFFF;
+		if (address + (((encoded << 8) + address) >> 12) != target)
+		{
+			throw new IllegalArgumentException("A script call is out of range");
+		}
+		return encoded;
 	}
 
 	private static boolean threaded(GscAst.Call call)
@@ -1457,6 +1516,7 @@ public final class Iw4GscCompiler
 
 		void writeShort(int value)
 		{
+			alignOperand(2);
 			write(value >>> 8);
 			write(value);
 		}
@@ -1470,6 +1530,7 @@ public final class Iw4GscCompiler
 
 		void writeInt(int value)
 		{
+			alignOperand(4);
 			write(value >>> 24);
 			write(value >>> 16);
 			write(value >>> 8);
@@ -1478,7 +1539,19 @@ public final class Iw4GscCompiler
 
 		void writeFloat(float value)
 		{
+			while (size % 4 != 0)
+			{
+				write(0xFF);
+			}
 			writeInt(Float.floatToIntBits(value));
+		}
+
+		void alignOperand(int width)
+		{
+			while ((size & 31) + width > 32)
+			{
+				write(0xFF);
+			}
 		}
 
 		void patchShort(int offset, int value)
