@@ -3,6 +3,7 @@ package openrtm.cod;
 import openrtm.cod.gsc.Iw4GscCompiler;
 import openrtm.cod.gsc.Iw4GscProgram;
 import openrtm.console.ConsoleService;
+import openrtm.console.ConsoleService.TransferProgress;
 import openrtm.console.DebuggerService;
 
 import java.io.IOException;
@@ -134,9 +135,11 @@ final class Mw2Adapter extends AbstractCodAdapter
 	}
 
 	@Override
-	protected void onInjectGsc(Path source)
+	protected void onInjectGsc(Path source, TransferProgress progress)
 	{
-		Iw4GscProgram program = Iw4GscCompiler.compile(source);
+		Iw4GscProgram program = Iw4GscCompiler.compile(source,
+			(percent, message) -> progress.update(1 + percent * 14 / 100, 100, message));
+		progress.update(16, 100, "Checking the game for an existing menu");
 		PatchState patchState = scriptPatchState();
 		PatchState hookState = scriptHookState();
 		if (patchState != hookState)
@@ -169,23 +172,20 @@ final class Mw2Adapter extends AbstractCodAdapter
 		byte[] bytecode = program.bytecode();
 		int tableLength = program.stringTable(0, SCRIPT_IMAGE).length;
 		long previousTable = scriptStringBuffer;
+		progress.update(20, 100, "Reserving menu memory");
 		long nextTable = allocate(tableLength);
 		long nextPool = 0;
 		boolean published = false;
 		try
 		{
 			byte[] table = program.stringTable(nextTable, SCRIPT_IMAGE);
-			write(nextTable, table);
-			if (!Arrays.equals(read(nextTable, table.length), table))
-			{
-				throw new IllegalStateException("The GSC upload could not be verified. Try injecting again.");
-			}
+			writeVerified(nextTable, table, progress, 22, 36, "Uploading menu text");
 			if (patchState == PatchState.STOCK)
 			{
 				nextPool = allocate(SCRIPT_ALLOCATION_SIZE);
 			}
 			published = true;
-			installScript(patchState, nextPool, nextTable, bytecode);
+			installScript(patchState, nextPool, nextTable, bytecode, progress);
 			if (patchState == PatchState.STOCK)
 			{
 				scriptBuffer = nextPool;
@@ -214,11 +214,13 @@ final class Mw2Adapter extends AbstractCodAdapter
 		}
 		if (previousTable != 0)
 		{
+			progress.update(98, 100, "Releasing the previous menu");
 			free(previousTable);
 		}
 	}
 
-	private void installScript(PatchState patchState, long poolAddress, long tableAddress, byte[] bytecode)
+	private void installScript(PatchState patchState, long poolAddress, long tableAddress, byte[] bytecode,
+		TransferProgress progress)
 	{
 		boolean attachedHere = false;
 		boolean paused = false;
@@ -235,8 +237,10 @@ final class Mw2Adapter extends AbstractCodAdapter
 			{
 				throw new IllegalStateException("Resume the game before injecting.");
 			}
+			progress.update(40, 100, "Pausing console for installation");
 			debugger.pause();
 			paused = true;
+			progress.update(41, 100, "Console paused: Preparing installation");
 			if (debugger.executionState() != DebuggerService.ExecutionState.STOPPED
 				|| readIntBig(SCRIPT_LOCK + 0x14) != 0 || readIntBig(SCRIPT_LOCK + 0x18) != 0)
 			{
@@ -265,10 +269,11 @@ final class Mw2Adapter extends AbstractCodAdapter
 				{
 					poolData.putInt(0x38004, (int) (poolAddress + marker - SCRIPT_IMAGE));
 				}
-				writeVerified(poolAddress, pool);
+				writeVerified(poolAddress, pool, progress, 45, 62, "Console paused: Preserving game text");
 			}
 			try
 			{
+				progress.update(63, 100, "Console paused: Preparing menu startup");
 				writeVerified(SCRIPT_HOOK_STATE, ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
 					.putInt((int) tableAddress).putInt(0).putInt(0).array());
 				if (patchState == PatchState.STOCK)
@@ -290,12 +295,15 @@ final class Mw2Adapter extends AbstractCodAdapter
 						throw new IllegalStateException("The GSC upload could not be verified.");
 					}
 				}
-				writeVerified(SCRIPT_IMAGE, bytecode);
+				writeVerified(SCRIPT_IMAGE, bytecode, progress, 68, 90, "Console paused: Installing menu");
+				progress.update(92, 100, "Console paused: Verifying startup");
 				writeVerified(SCRIPT_LOAD_HOOK, scriptLoadHook());
+				progress.update(94, 100, "Console paused: Finishing installation");
 				flushScriptCaches();
 			}
 			catch (RuntimeException failure)
 			{
+				progress.update(94, 100, "Console paused: Restoring previous state");
 				try
 				{
 					for (Map.Entry<Long, byte[]> entry : backup.entrySet())
@@ -321,12 +329,29 @@ final class Mw2Adapter extends AbstractCodAdapter
 		{
 			if (paused && canResume)
 			{
+				progress.update(96, 100, "Resuming console");
 				debugger.resume();
 			}
 			if (attachedHere && canResume)
 			{
 				debugger.detach();
 			}
+		}
+	}
+
+	private void writeVerified(long address, byte[] data, TransferProgress progress,
+		int start, int end, String message)
+	{
+		progress.update(start, 100, message);
+		for (int offset = 0; offset < data.length; offset += 4096)
+		{
+			int length = Math.min(4096, data.length - offset);
+			write(address + offset, Arrays.copyOfRange(data, offset, offset + length));
+			progress.update(start + (long) (end - start) * (offset + length) / data.length, 100, message);
+		}
+		if (!Arrays.equals(read(address, data.length), data))
+		{
+			throw new IllegalStateException("The GSC upload could not be verified.");
 		}
 	}
 

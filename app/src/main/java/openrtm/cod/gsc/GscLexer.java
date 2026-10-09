@@ -17,7 +17,7 @@ final class GscLexer
 
 	GscLexer(String source, String file)
 	{
-		this.source = source;
+		this.source = source.startsWith("\uFEFF") ? source.substring(1) : source;
 		this.file = file;
 	}
 

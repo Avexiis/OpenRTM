@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -33,6 +34,8 @@ public final class Iw4GscCompiler
 	private final Map<String, Integer> farCalls = loadCalls("/openrtm/cod/iw4-far-calls.tsv");
 	private final Map<String, Integer> stockCalls = loadCalls("/openrtm/cod/iw4-stock-calls.tsv");
 	private final List<Iw4GscProgram.StringReference> strings = new ArrayList<>();
+	private final List<Iw4GscProgram.ExportReference> exportReferences = new ArrayList<>();
+	private BiConsumer<Integer, String> progress = (percent, message) -> {};
 	private final Deque<Label> breaks = new ArrayDeque<>();
 	private final Deque<Label> continues = new ArrayDeque<>();
 	private final List<String> locals = new ArrayList<>();
@@ -40,6 +43,11 @@ public final class Iw4GscCompiler
 	private int generatedNames;
 
 	public static Iw4GscProgram compile(Path selected)
+	{
+		return compile(selected, (percent, message) -> {});
+	}
+
+	public static Iw4GscProgram compile(Path selected, BiConsumer<Integer, String> progress)
 	{
 		if (selected == null)
 		{
@@ -50,19 +58,35 @@ public final class Iw4GscCompiler
 		{
 			throw new IllegalArgumentException("No GSC files were found");
 		}
-		List<GscAst.Function> functions = new ArrayList<>();
+		Map<String, String> sources = new LinkedHashMap<>();
+		progress.accept(0, "Reading project files");
 		for (Path file : files)
 		{
 			try
 			{
-				String source = Files.readString(file, StandardCharsets.UTF_8);
-				functions.addAll(new GscParser(new GscLexer(source, file.getFileName().toString()).lex())
-					.parse().functions());
+				sources.put(file.getFileName().toString(), Files.readString(file, StandardCharsets.UTF_8));
 			}
 			catch (IOException failure)
 			{
 				throw new IllegalArgumentException("Unable to read " + file.getFileName(), failure);
 			}
+		}
+		return compile(sources, progress);
+	}
+
+	public static Iw4GscProgram compile(Map<String, String> sources)
+	{
+		return compile(sources, (percent, message) -> {});
+	}
+
+	public static Iw4GscProgram compile(Map<String, String> sources, BiConsumer<Integer, String> progress)
+	{
+		List<GscAst.Function> functions = new ArrayList<>();
+		int parsed = 0;
+		for (Map.Entry<String, String> source : sources.entrySet())
+		{
+			progress.accept(5 + parsed++ * 30 / Math.max(1, sources.size()), "Checking " + source.getKey());
+			functions.addAll(new GscParser(new GscLexer(source.getValue(), source.getKey()).lex()).parse().functions());
 		}
 		Set<String> sourceNames = functions.stream()
 			.map(function -> normalize(function.name()))
@@ -74,7 +98,9 @@ public final class Iw4GscCompiler
 				functions.add(function);
 			}
 		}
-		return new Iw4GscCompiler().compileFunctions(functions);
+		Iw4GscCompiler compiler = new Iw4GscCompiler();
+		compiler.progress = progress;
+		return compiler.compileFunctions(functions);
 	}
 
 	private Iw4GscProgram compileFunctions(List<GscAst.Function> sourceFunctions)
@@ -107,10 +133,13 @@ public final class Iw4GscCompiler
 			.filter(value -> reachable.contains(normalize(value.name())))
 			.collect(Collectors.toCollection(ArrayList::new));
 		ordered.sort(Comparator.comparingInt(value -> normalize(value.name()).equals("init") ? 0 : 1));
+		int compiled = 0;
 		for (GscAst.Function sourceFunction : ordered)
 		{
+			progress.accept(40 + compiled++ * 50 / Math.max(1, ordered.size()), "Compiling " + sourceFunction.name());
 			compileFunction(sourceFunction);
 		}
+		progress.accept(95, "Linking script functions");
 		for (Map.Entry<Integer, Label> entry : callTrampolines.entrySet())
 		{
 			mark(entry.getValue());
@@ -131,7 +160,8 @@ public final class Iw4GscCompiler
 		{
 			throw new IllegalArgumentException("The compiled script is too large");
 		}
-		return new Iw4GscProgram(output.bytes(), strings);
+		progress.accept(100, "Compilation complete");
+		return new Iw4GscProgram(output.bytes(), strings, exportReferences);
 	}
 
 	private void compileFunction(GscAst.Function sourceFunction)
@@ -1104,11 +1134,20 @@ public final class Iw4GscCompiler
 			token = customTokens.computeIfAbsent(value, ignored -> 0xF35 + customTokens.size());
 		}
 		emit(opcode);
+		output.alignOperand(2);
+		if (Iw4GscTables.token(value) < 0)
+		{
+			exportReferences.add(new Iw4GscProgram.ExportReference(output.size(), 2, "&" + value));
+		}
 		output.writeShort(token);
 	}
 
 	private void emit(int opcode)
 	{
+		if (opcode == 0x76)
+		{
+			exportReferences.add(new Iw4GscProgram.ExportReference(output.size(), 1, null));
+		}
 		output.write(opcode);
 	}
 

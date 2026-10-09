@@ -1,5 +1,7 @@
 package openrtm.cod;
 
+import openrtm.console.ConsoleService.TransferProgress;
+
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -113,5 +115,11 @@ public interface CodAdapter
 	default void injectGsc(Path source)
 	{
 		throw new UnsupportedOperationException(game().tabName() + " does not support GSC injection");
+	}
+
+	default void injectGsc(Path source, TransferProgress progress)
+	{
+		injectGsc(source);
+		progress.update(100, 100, "Menu ready");
 	}
 }

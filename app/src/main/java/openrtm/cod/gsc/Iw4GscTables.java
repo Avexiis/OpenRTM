@@ -6,8 +6,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 final class Iw4GscTables
 {
@@ -34,6 +36,13 @@ final class Iw4GscTables
 	static int token(String name)
 	{
 		return TOKENS.getOrDefault(normalize(name), -1);
+	}
+
+	static Set<String> completionNames()
+	{
+		Set<String> names = new LinkedHashSet<>(FUNCTIONS.keySet());
+		names.addAll(METHODS.keySet());
+		return Set.copyOf(names);
 	}
 
 	private static void loadBuiltins()

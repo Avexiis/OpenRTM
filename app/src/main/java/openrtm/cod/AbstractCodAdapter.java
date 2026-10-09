@@ -3,6 +3,7 @@ package openrtm.cod;
 import com.jjrpc.JRPC;
 import openrtm.cod.gsc.GscProjectTitle;
 import openrtm.console.ConsoleService;
+import openrtm.console.ConsoleService.TransferProgress;
 
 import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
@@ -187,8 +188,26 @@ abstract class AbstractCodAdapter implements CodAdapter
 	@Override
 	public final void injectGsc(Path source)
 	{
+		injectGsc(source, (completed, total, message) -> {});
+	}
+
+	@Override
+	public final void injectGsc(Path source, TransferProgress progress)
+	{
+		TransferProgress reporter = (completed, total, message) -> {
+			try
+			{
+				progress.update(completed, total, message);
+			}
+			catch (RuntimeException failure)
+			{
+				System.getLogger(AbstractCodAdapter.class.getName()).log(Level.WARNING, "Progress display failed", failure);
+			}
+		};
+		reporter.update(0, 100, "Checking the running game");
 		requireTitle();
-		onInjectGsc(source);
+		onInjectGsc(source, reporter);
+		reporter.update(99, 100, "Sending loaded notification");
 		try
 		{
 			console.xNotify("OpenRTM - " + GscProjectTitle.read(source) + " loaded", JRPC.XNotiyLogo.FLASHING_XBOX_CONSOLE);
@@ -198,6 +217,7 @@ abstract class AbstractCodAdapter implements CodAdapter
 			System.getLogger(AbstractCodAdapter.class.getName()).log(Level.WARNING,
 				"The menu was injected, but the console notification could not be sent", failure);
 		}
+		reporter.update(100, 100, "Menu ready");
 	}
 
 	protected Map<String, Long> onReadStats(String group)
@@ -262,6 +282,11 @@ abstract class AbstractCodAdapter implements CodAdapter
 	protected void onInjectGsc(Path source)
 	{
 		throw unsupported("GSC injection");
+	}
+
+	protected void onInjectGsc(Path source, TransferProgress progress)
+	{
+		onInjectGsc(source);
 	}
 
 	protected final void command(long address, String command)

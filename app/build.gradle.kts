@@ -53,6 +53,8 @@ dependencies {
     implementation(project(":JJRPC"))
     implementation("com.formdev:flatlaf:3.7.2")
     implementation("com.formdev:flatlaf-extras:3.7.2")
+    implementation("com.fifesoft:rsyntaxtextarea:4.0.1")
+    implementation("com.fifesoft:autocomplete:3.3.2")
     implementation(files(rootProject.file("libs/synthetica/synthetica.jar")))
     implementation(files(rootProject.file("libs/synthetica/syntheticaBlackMoon.jar")))
     implementation(files(rootProject.file("libs/synthetica/syntheticaBlueLight.jar")))

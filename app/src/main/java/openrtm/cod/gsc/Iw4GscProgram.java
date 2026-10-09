@@ -1,8 +1,11 @@
 package openrtm.cod.gsc;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,13 +16,19 @@ public final class Iw4GscProgram
 	{
 	}
 
+	record ExportReference(int offset, int length, String value)
+	{
+	}
+
 	private final byte[] bytecode;
 	private final List<StringReference> strings;
+	private final List<ExportReference> exportReferences;
 
-	Iw4GscProgram(byte[] bytecode, List<StringReference> strings)
+	Iw4GscProgram(byte[] bytecode, List<StringReference> strings, List<ExportReference> exportReferences)
 	{
 		this.bytecode = Arrays.copyOf(bytecode, bytecode.length);
 		this.strings = List.copyOf(strings);
+		this.exportReferences = List.copyOf(exportReferences);
 	}
 
 	public int size()
@@ -30,6 +39,43 @@ public final class Iw4GscProgram
 	public byte[] bytecode()
 	{
 		return Arrays.copyOf(bytecode, bytecode.length);
+	}
+
+	public byte[] gscbin()
+	{
+		List<ExportReference> references = new ArrayList<>(exportReferences);
+		for (StringReference reference : strings)
+		{
+			references.add(new ExportReference(reference.offset(), 2, reference.value()));
+		}
+		references.sort(Comparator.comparingInt(ExportReference::offset));
+		ByteArrayOutputStream file = new ByteArrayOutputStream();
+		file.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(bytecode.length).array());
+		int cursor = 0;
+		for (ExportReference reference : references)
+		{
+			file.write(bytecode, cursor, reference.offset() - cursor);
+			if (reference.value() == null)
+			{
+				file.write(0x69);
+			}
+			else
+			{
+				for (int index = 0; index < reference.value().length(); index++)
+				{
+					char value = reference.value().charAt(index);
+					if (value == 0 || value > 255)
+					{
+						throw new IllegalArgumentException("A script string contains an unsupported character");
+					}
+					file.write(value);
+				}
+				file.write(0);
+			}
+			cursor = reference.offset() + reference.length();
+		}
+		file.write(bytecode, cursor, bytecode.length - cursor);
+		return file.toByteArray();
 	}
 
 	public byte[] stringTable(long tableAddress, long codeAddress)
