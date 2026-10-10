@@ -42,12 +42,17 @@ final class GscTaskProgress extends JPanel
 
 	void finish(boolean successful)
 	{
+		finish(successful, successful ? "Complete" : "Stopped: " + step.getText());
+	}
+
+	void finish(boolean successful, String message)
+	{
 		bar.setIndeterminate(false);
 		bar.setString(successful ? "100%" : "Stopped");
 		if (successful)
 		{
 			bar.setValue(100);
 		}
-		step.setText(successful ? "Complete" : "Stopped: " + step.getText());
+		step.setText(message);
 	}
 }

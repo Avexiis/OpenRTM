@@ -1,5 +1,6 @@
 package openrtm.cod;
 
+import openrtm.cod.gsc.Iw4GscBinary;
 import openrtm.cod.gsc.Iw4GscCompiler;
 import openrtm.cod.gsc.Iw4GscProgram;
 import openrtm.console.ConsoleService;
@@ -17,6 +18,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 final class Mw2Adapter extends AbstractCodAdapter
 {
@@ -137,8 +139,9 @@ final class Mw2Adapter extends AbstractCodAdapter
 	@Override
 	protected void onInjectGsc(Path source, TransferProgress progress)
 	{
-		Iw4GscProgram program = Iw4GscCompiler.compile(source,
-			(percent, message) -> progress.update(1 + percent * 14 / 100, 100, message));
+		BiConsumer<Integer, String> preparing = (percent, message) -> progress.update(1 + percent * 14 / 100, 100, message);
+		Iw4GscProgram program = Iw4GscBinary.isCompiled(source)
+			? Iw4GscBinary.read(source, preparing) : Iw4GscCompiler.compile(source, preparing);
 		progress.update(16, 100, "Checking the game for an existing menu");
 		PatchState patchState = scriptPatchState();
 		PatchState hookState = scriptHookState();

@@ -24,9 +24,10 @@ public final class GscProjectTitle
 	{
 		Path selected = source.toAbsolutePath().normalize();
 		boolean directory = Files.isDirectory(selected);
+		boolean compiled = !directory && Iw4GscBinary.isCompiled(selected);
 		Path parent = directory ? selected : selected.getParent();
 		Path config = parent == null ? null : parent.resolve("config.il");
-		boolean project = config != null && Files.isRegularFile(config);
+		boolean project = !compiled && config != null && Files.isRegularFile(config);
 		if (project)
 		{
 			try
@@ -68,7 +69,11 @@ public final class GscProjectTitle
 		}
 		Path name = (project ? parent : selected).getFileName();
 		String title = name == null ? "GSC menu" : name.toString();
-		if (!directory && !project && title.toLowerCase(Locale.ROOT).endsWith(".gsc"))
+		if (compiled)
+		{
+			title = title.substring(0, title.length() - 7);
+		}
+		else if (!directory && !project && title.toLowerCase(Locale.ROOT).endsWith(".gsc"))
 		{
 			title = title.substring(0, title.length() - 4);
 		}
