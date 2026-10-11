@@ -19,7 +19,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public final class Iw4GscCompiler
 {
@@ -40,6 +39,7 @@ public final class Iw4GscCompiler
 	private final Deque<Label> continues = new ArrayDeque<>();
 	private final List<String> locals = new ArrayList<>();
 	private final Map<GscAst.Statement, List<String>> temporaryLocals = new HashMap<>();
+	private final Map<GscAst.ArrayLiteral, String> temporaryArrays = new HashMap<>();
 	private int generatedNames;
 
 	public static Iw4GscProgram compile(Path selected)
@@ -53,18 +53,20 @@ public final class Iw4GscCompiler
 		{
 			throw new IllegalArgumentException("Select a GSC file or project folder");
 		}
-		List<Path> files = sourceFiles(selected.toAbsolutePath().normalize());
+		Path normalized = selected.toAbsolutePath().normalize();
+		List<Path> files = sourceFiles(normalized);
 		if (files.isEmpty())
 		{
 			throw new IllegalArgumentException("No GSC files were found");
 		}
 		Map<String, String> sources = new LinkedHashMap<>();
+		Path root = Files.isDirectory(normalized) ? normalized : normalized.getParent();
 		progress.accept(0, "Reading project files");
 		for (Path file : files)
 		{
 			try
 			{
-				sources.put(file.getFileName().toString(), Files.readString(file, StandardCharsets.UTF_8));
+				sources.put(root.relativize(file).toString().replace('\\', '/'), Files.readString(file, StandardCharsets.UTF_8));
 			}
 			catch (IOException failure)
 			{
@@ -168,6 +170,7 @@ public final class Iw4GscCompiler
 	{
 		locals.clear();
 		temporaryLocals.clear();
+		temporaryArrays.clear();
 		functions.get(normalize(sourceFunction.name())).position = output.size();
 		for (String parameter : sourceFunction.parameters())
 		{
@@ -185,6 +188,12 @@ public final class Iw4GscCompiler
 		{
 			emitToken(0x04, name);
 			locals.add(name);
+		}
+		if (normalize(sourceFunction.name()).equals("init"))
+		{
+			GscToken token = sourceFunction.token();
+			compileAssignment(new GscAst.Assignment(new GscAst.Field(new GscAst.Name("level", token),
+				"console", token), "=", literal(1, token), token));
 		}
 		compileBlock(sourceFunction.body());
 		emit(0x00);
@@ -436,6 +445,10 @@ public final class Iw4GscCompiler
 		{
 			compileBinary(binary);
 		}
+		else if (expression instanceof GscAst.Conditional conditional)
+		{
+			compileConditional(conditional);
+		}
 		else if (expression instanceof GscAst.Assignment assignment)
 		{
 			compileAssignment(assignment);
@@ -501,11 +514,22 @@ public final class Iw4GscCompiler
 
 	private void compileArray(GscAst.ArrayLiteral array)
 	{
-		if (!array.values().isEmpty())
-		{
-			throw error(array.token(), "Array literals may only be empty");
-		}
 		emit(0x14);
+		if (array.values().isEmpty())
+		{
+			return;
+		}
+		String name = temporaryArrays.get(array);
+		GscAst.Name temporary = new GscAst.Name(name, array.token());
+		emitAssignmentTarget(temporary, array.token());
+		for (int index = 0; index < array.values().size(); index++)
+		{
+			compileExpression(array.values().get(index));
+			emitInteger(Integer.toString(index));
+			emitArrayReference(temporary, array.token());
+			emit(0x71);
+		}
+		emitLocalRead(name, array.token());
 	}
 
 	private void compileVector(GscAst.VectorLiteral vector)
@@ -607,6 +631,19 @@ public final class Iw4GscCompiler
 			default -> throw error(binary.token(), "Unsupported operator '" + binary.operator() + "'");
 		};
 		emit(opcode);
+	}
+
+	private void compileConditional(GscAst.Conditional conditional)
+	{
+		Label alternate = new Label();
+		Label end = new Label();
+		compileExpression(conditional.condition());
+		emitJump(0x4F, alternate, 2, true);
+		compileExpression(conditional.whenTrue());
+		emitJump(0x54, end, 4, false);
+		mark(alternate);
+		compileExpression(conditional.whenFalse());
+		mark(end);
 	}
 
 	private void compileAssignment(GscAst.Assignment assignment)
@@ -739,13 +776,39 @@ public final class Iw4GscCompiler
 			emitScriptCall(call, null, stock);
 			return;
 		}
-		int builtin = call.receiver() == null ? Iw4GscTables.function(name)
-			: Iw4GscTables.method(name.equals("__openrtm_native_ishost") ? "ishost" : name);
+		int helper = switch (name)
+		{
+			case "readbyte" -> 0;
+			case "writebyte" -> 1;
+			case "readstring" -> 2;
+			case "writestring" -> 3;
+			case "rpc" -> 4;
+			default -> -1;
+		};
+		if (helper >= 0)
+		{
+			int arguments = call.arguments().size();
+			int expected = helper == 0 || helper == 2 ? 1 : 2;
+			if (call.receiver() != null || threaded(call) || (helper == 4 ? arguments < 3 || arguments > 4 : arguments != expected))
+			{
+				throw error(call.token(), "Unsupported arguments or call form for '" + call.name() + "'");
+			}
+			emitCallArguments(call);
+			compileExpression(literal(helper, call.token()));
+			emit(0x78 + arguments);
+			output.writeShort(0xF000);
+			return;
+		}
+		String nativeName = switch (name)
+		{
+			case "__openrtm_native_ishost" -> "ishost";
+			case "__openrtm_native_setclientdvar" -> "setclientdvar";
+			default -> name;
+		};
+		int builtin = call.receiver() == null ? Iw4GscTables.function(nativeName) : Iw4GscTables.method(nativeName);
 		if (builtin < 0)
 		{
-			emitScriptCallArguments(call);
-			emitScriptCall(call, null, 0xF1F1F1);
-			return;
+			throw error(call.token(), "Unknown function '" + call.name() + "'");
 		}
 		emitCallArguments(call);
 		int arguments = call.arguments().size();
@@ -820,8 +883,7 @@ public final class Iw4GscCompiler
 			Label target = functions.get(name);
 			if (target == null)
 			{
-				output.write24(0xF1F1F1);
-				return;
+				throw error(reference.token(), "Unknown function '" + reference.name() + "'");
 			}
 			output.write24(0);
 			calls.add(new CallFixup(target, instruction, operand));
@@ -1222,34 +1284,9 @@ public final class Iw4GscCompiler
 
 	private static List<Path> sourceFiles(Path selected)
 	{
-		if (!Files.exists(selected))
+		try
 		{
-			throw new IllegalArgumentException("The selected GSC path does not exist");
-		}
-		if (Files.isRegularFile(selected))
-		{
-			if (!selected.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gsc"))
-			{
-				throw new IllegalArgumentException("Select a .gsc file or project folder");
-			}
-			Path parent = selected.getParent();
-			if (parent != null && Files.isRegularFile(parent.resolve("config.il")))
-			{
-				return gscFiles(parent);
-			}
-			return List.of(selected);
-		}
-		return gscFiles(selected);
-	}
-
-	private static List<Path> gscFiles(Path directory)
-	{
-		try (Stream<Path> files = Files.list(directory))
-		{
-			return files.filter(Files::isRegularFile)
-				.filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gsc"))
-				.sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase(Locale.ROOT)))
-				.toList();
+			return GscProjects.files(selected);
 		}
 		catch (IOException failure)
 		{
@@ -1320,7 +1357,13 @@ public final class Iw4GscCompiler
 				declared.add(normalize(name));
 			}
 		}, expression -> {
-			if (expression instanceof GscAst.Assignment assignment)
+			if (expression instanceof GscAst.ArrayLiteral array && !array.values().isEmpty())
+			{
+				String name = generated("array");
+				temporaryArrays.put(array, name);
+				declared.add(name);
+			}
+			else if (expression instanceof GscAst.Assignment assignment)
 			{
 				GscAst.Expression target = assignment.target();
 				while (target instanceof GscAst.Index index)
@@ -1466,12 +1509,13 @@ public final class Iw4GscCompiler
 		if (expression instanceof GscAst.Literal literal
 			&& (literal.type() == GscAst.LiteralType.FLOAT || literal.type() == GscAst.LiteralType.INTEGER))
 		{
-			return Float.parseFloat(literal.value());
+			return literal.type() == GscAst.LiteralType.INTEGER
+				? (int) Long.decode(literal.value()).longValue() : Float.parseFloat(literal.value());
 		}
 		if (expression instanceof GscAst.Unary unary && unary.operator().equals("-")
-			&& unary.expression() instanceof GscAst.Literal literal)
+			&& unary.expression() instanceof GscAst.Literal)
 		{
-			return -Float.parseFloat(literal.value());
+			return -constantFloat(unary.expression());
 		}
 		throw error(expression.token(), "Vector components must be constant numbers");
 	}

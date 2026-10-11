@@ -1,3 +1,18 @@
+setClientDvar(name, value)
+{
+	return self __openrtm_native_setclientdvar(name, value);
+}
+
+getWeaponClass(weapon)
+{
+	return weaponClass(weapon);
+}
+
+tableLookupIStringByRow(table, row, column)
+{
+	return tableLookupIString(table, 0, tableLookupByRow(table, row, 0), column);
+}
+
 isHost()
 {
 	if (self == level)

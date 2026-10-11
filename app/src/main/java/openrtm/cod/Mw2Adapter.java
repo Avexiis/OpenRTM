@@ -8,6 +8,7 @@ import openrtm.console.ConsoleService.TransferProgress;
 import openrtm.console.DebuggerService;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -41,6 +42,18 @@ final class Mw2Adapter extends AbstractCodAdapter
 	private static final long SCRIPT_LOAD_HOOK = 0x82249D78L;
 	private static final long SCRIPT_HOOK_CAVE = 0x823C76D0L;
 	private static final long SCRIPT_HOOK_STATE = 0x823C7900L;
+	private static final long SCRIPT_HELPER_CAVE = 0x823C8000L;
+	private static final long SCRIPT_HELPER_HOOK = 0x8224E33CL;
+	private static final byte[] SCRIPT_HELPER_STOCK = HexFormat.of().parseHex("7CC8382E");
+	private static final byte[] SCRIPT_HELPER_BRANCH = HexFormat.of().parseHex("48179CC4");
+	private static final byte[] SCRIPT_HELPERS = scriptHelpers();
+	private static final Map<Long, String> SCRIPT_HELPER_TARGETS = Map.of(
+		0x8224B948L, "7D8802A69181FFF89421FFA04BFFFE0D",
+		0x8224C620L, "7D8802A69181FFF8FBC1FFE8FBE1FFF0",
+		0x8224C2C8L, "7D8802A69181FFF8FBC1FFE8FBE1FFF0",
+		0x82249D88L, "3D608359394B3C08892A00042B090000",
+		COMMAND, "7D8802A69181FFF8FBC1FFE8FBE1FFF0",
+		SERVER_COMMAND, "7CA62B782F03FFFF409A00143D608201");
 	private static final long SCRIPT_RESUME_PATCH = 0x8224FE64L;
 	private static final long SCRIPT_REDIRECT_START = 0x82241AF0L;
 	private static final int SCRIPT_POOL_SIZE = 0x38008;
@@ -145,7 +158,7 @@ final class Mw2Adapter extends AbstractCodAdapter
 		progress.update(16, 100, "Checking the game for an existing menu");
 		PatchState patchState = scriptPatchState();
 		PatchState hookState = scriptHookState();
-		if (patchState != hookState)
+		if (patchState != hookState || patchState != scriptHelperState())
 		{
 			throw new IllegalStateException("The game script state is incomplete. Restart the game before injecting.");
 		}
@@ -253,6 +266,9 @@ final class Mw2Adapter extends AbstractCodAdapter
 			backup.put(SCRIPT_POINTER, read(SCRIPT_POINTER, 4));
 			backup.put(SCRIPT_HOOK_CAVE, read(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_HANDLER.length));
 			backup.put(SCRIPT_HOOK_STATE, read(SCRIPT_HOOK_STATE, 12));
+			backup.put(SCRIPT_HELPER_CAVE, read(SCRIPT_HELPER_CAVE, SCRIPT_HELPERS.length));
+			backup.put(SCRIPT_HELPER_HOOK, read(SCRIPT_HELPER_HOOK, SCRIPT_HELPER_STOCK.length));
+			backup.put(SCRIPT_HOOK_STATE + 16, read(SCRIPT_HOOK_STATE + 16, 4));
 			backup.put(SCRIPT_LOAD_HOOK, read(SCRIPT_LOAD_HOOK, SCRIPT_LOAD_HOOK_STOCK.length));
 			backup.put(SCRIPT_RESUME_PATCH, read(SCRIPT_RESUME_PATCH, SCRIPT_RESUME_STOCK.length));
 			for (long address : SCRIPT_HIGH_PATCHES)
@@ -262,6 +278,18 @@ final class Mw2Adapter extends AbstractCodAdapter
 			for (long address : SCRIPT_LOW_PATCHES)
 			{
 				backup.put(address, read(address, 2));
+			}
+			if (scriptHelperState() != patchState)
+			{
+				throw new IllegalStateException("The game script state changed. Restart the game before injecting.");
+			}
+			for (Map.Entry<Long, String> target : SCRIPT_HELPER_TARGETS.entrySet())
+			{
+				byte[] expected = HexFormat.of().parseHex(target.getValue());
+				if (!Arrays.equals(read(target.getKey(), expected.length), expected))
+				{
+					throw new IllegalStateException("The game has incompatible modifications. Restart it before injecting.");
+				}
 			}
 			if (patchState == PatchState.STOCK)
 			{
@@ -279,8 +307,11 @@ final class Mw2Adapter extends AbstractCodAdapter
 				progress.update(63, 100, "Console paused: Preparing menu startup");
 				writeVerified(SCRIPT_HOOK_STATE, ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
 					.putInt((int) tableAddress).putInt(0).putInt(0).array());
+				writeVerified(SCRIPT_HOOK_STATE + 16, new byte[4]);
 				if (patchState == PatchState.STOCK)
 				{
+					writeVerified(SCRIPT_HELPER_CAVE, SCRIPT_HELPERS);
+					writeVerified(SCRIPT_HELPER_HOOK, SCRIPT_HELPER_BRANCH);
 					writeVerified(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_HANDLER);
 					writeIntBig(SCRIPT_POINTER, poolAddress);
 					for (long address : SCRIPT_HIGH_PATCHES)
@@ -369,6 +400,8 @@ final class Mw2Adapter extends AbstractCodAdapter
 
 	private void flushScriptCaches()
 	{
+		flushInstructionCache(SCRIPT_HELPER_CAVE, SCRIPT_HELPERS.length);
+		flushInstructionCache(SCRIPT_HELPER_HOOK, SCRIPT_HELPER_STOCK.length);
 		flushInstructionCache(SCRIPT_HOOK_CAVE, SCRIPT_HOOK_HANDLER.length);
 		flushInstructionCache(SCRIPT_REDIRECT_START, SCRIPT_REDIRECT_LENGTH);
 		flushInstructionCache(SCRIPT_RESUME_PATCH, SCRIPT_RESUME_ENABLED.length);
@@ -629,6 +662,43 @@ final class Mw2Adapter extends AbstractCodAdapter
 			return PatchState.PATCHED;
 		}
 		return PatchState.MIXED;
+	}
+
+	private PatchState scriptHelperState()
+	{
+		byte[] hook = read(SCRIPT_HELPER_HOOK, SCRIPT_HELPER_STOCK.length);
+		byte[] cave = read(SCRIPT_HELPER_CAVE, SCRIPT_HELPERS.length);
+		if (Arrays.equals(hook, SCRIPT_HELPER_STOCK) && Arrays.equals(cave, new byte[SCRIPT_HELPERS.length]))
+		{
+			return PatchState.STOCK;
+		}
+		if (scriptHookBuffer == SCRIPT_HOOK_CAVE && Arrays.equals(hook, SCRIPT_HELPER_BRANCH)
+			&& Arrays.equals(cave, SCRIPT_HELPERS))
+		{
+			return PatchState.PATCHED;
+		}
+		return PatchState.MIXED;
+	}
+
+	private static byte[] scriptHelpers()
+	{
+		try (InputStream resource = Mw2Adapter.class.getResourceAsStream("/openrtm/cod/iw4-helpers.bin"))
+		{
+			if (resource == null)
+			{
+				throw new IllegalStateException("Menu support is missing from this installation");
+			}
+			byte[] code = resource.readAllBytes();
+			if (code.length == 0 || code.length > 4096 || code.length % 4 != 0)
+			{
+				throw new IllegalStateException("Menu support is damaged. Reinstall the application.");
+			}
+			return code;
+		}
+		catch (IOException failure)
+		{
+			throw new IllegalStateException("Menu support could not be loaded", failure);
+		}
 	}
 
 	private byte[] scriptLoadHook()

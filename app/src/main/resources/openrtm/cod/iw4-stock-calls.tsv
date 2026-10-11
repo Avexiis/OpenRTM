@@ -1,4 +1,10 @@
 15b79b	_clearperks
+1670bb	_objective_delete
+1718bb	array_thread
+14de0b	getminutespassed
+1cacfb	getparent
+1cdc6b	setpointbar
+1d7a5b	updatechildren
 18528b	_disableweapon
 1854eb	_disableweaponswitch
 1855ab	_enableweaponswitch

@@ -75,7 +75,7 @@ final class GscAst
 	{
 	}
 
-	sealed interface Expression permits Literal, Name, ArrayLiteral, VectorLiteral, Unary, Binary, Assignment,
+	sealed interface Expression permits Literal, Name, ArrayLiteral, VectorLiteral, Unary, Binary, Conditional, Assignment,
 		Field, Index, Call, FunctionReference
 	{
 		GscToken token();
@@ -112,6 +112,10 @@ final class GscAst
 	}
 
 	record Binary(Expression left, String operator, Expression right, GscToken token) implements Expression
+	{
+	}
+
+	record Conditional(Expression condition, Expression whenTrue, Expression whenFalse, GscToken token) implements Expression
 	{
 	}
 
@@ -227,6 +231,12 @@ final class GscAst
 		{
 			visit(binary.left(), expressions);
 			visit(binary.right(), expressions);
+		}
+		else if (expression instanceof Conditional conditional)
+		{
+			visit(conditional.condition(), expressions);
+			visit(conditional.whenTrue(), expressions);
+			visit(conditional.whenFalse(), expressions);
 		}
 		else if (expression instanceof Assignment assignment)
 		{

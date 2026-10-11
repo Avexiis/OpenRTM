@@ -212,13 +212,26 @@ final class GscParser
 
 	private GscAst.Expression assignment()
 	{
-		GscAst.Expression left = logicalOr();
+		GscAst.Expression left = conditional();
 		if (match("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="))
 		{
 			GscToken operator = previous();
 			return new GscAst.Assignment(left, operator.text(), assignment(), operator);
 		}
 		return left;
+	}
+
+	private GscAst.Expression conditional()
+	{
+		GscAst.Expression condition = logicalOr();
+		if (match("?"))
+		{
+			GscToken operator = previous();
+			GscAst.Expression whenTrue = expression();
+			require(":");
+			return new GscAst.Conditional(condition, whenTrue, conditional(), operator);
+		}
+		return condition;
 	}
 
 	private GscAst.Expression logicalOr()
@@ -347,8 +360,9 @@ final class GscParser
 		if (peek().type() == GscToken.Type.NUMBER)
 		{
 			GscToken number = advance();
-			GscAst.LiteralType type = number.text().contains(".") || number.text().contains("e")
-				|| number.text().contains("E") ? GscAst.LiteralType.FLOAT : GscAst.LiteralType.INTEGER;
+			boolean hexadecimal = number.text().startsWith("0x") || number.text().startsWith("0X");
+			GscAst.LiteralType type = !hexadecimal && (number.text().contains(".") || number.text().contains("e")
+				|| number.text().contains("E")) ? GscAst.LiteralType.FLOAT : GscAst.LiteralType.INTEGER;
 			return new GscAst.Literal(type, number.text(), number);
 		}
 		if (peek().type() == GscToken.Type.STRING)
@@ -360,6 +374,11 @@ final class GscParser
 		{
 			GscToken string = require(GscToken.Type.STRING, "Expected a localized string");
 			return new GscAst.Literal(GscAst.LiteralType.LOCALIZED_STRING, string.text(), string);
+		}
+		if (match("@"))
+		{
+			GscToken string = require(GscToken.Type.STRING, "Expected a string after '@'");
+			return new GscAst.Literal(GscAst.LiteralType.STRING, string.text(), string);
 		}
 		if (match("["))
 		{
