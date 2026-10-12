@@ -18,6 +18,7 @@ Many file tools work offline. Connected features need a console on the same loca
 - OpenRTM is part of the Open360 project, which aims to provide fully open-source alternatives for existing paid and/or closed-source software.  
 - Open360 is currently made up of two parts. This project (OpenRTM), as well as [OpenGSC](https://github.com/BakedMike/OpenGSC-MW2) by [BakedMike](https://github.com/BakedMike)  
 - The Open360 Discord is located at: https://discord.gg/C8CqQPp2A5
+- Open360 has a voluntary [Patreon](https://www.patreon.com/Open360/posts/welcome-to-172004902). Its subscription offers a Discord role and pre-release update previews.
 
 ## Build and Run (for developers who may wish to contribute)
 
