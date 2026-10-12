@@ -33,16 +33,31 @@ final class GscParser
 		GscToken name = require(GscToken.Type.IDENTIFIER, "Expected a function name");
 		require("(");
 		List<String> parameters = new ArrayList<>();
+		List<GscAst.Statement> defaults = new ArrayList<>();
 		if (!check(")"))
 		{
 			do
 			{
-				parameters.add(require(GscToken.Type.IDENTIFIER, "Expected a parameter name").text());
+				GscToken parameter = require(GscToken.Type.IDENTIFIER, "Expected a parameter name");
+				parameters.add(parameter.text());
+				if (match("="))
+				{
+					GscAst.Name target = new GscAst.Name(parameter.text(), parameter);
+					GscAst.Expression value = expression();
+					GscAst.Call defined = new GscAst.Call(null, "", "isdefined", null, List.of(target), false, false, parameter);
+					GscAst.Expression condition = new GscAst.Unary("!", defined, false, parameter);
+					GscAst.Statement assignment = new GscAst.ExpressionStatement(
+						new GscAst.Assignment(target, "=", value, parameter), parameter);
+					defaults.add(new GscAst.IfStatement(condition, assignment, null, parameter));
+				}
 			}
 			while (match(","));
 		}
 		require(")");
-		return new GscAst.Function(name.text().toLowerCase(), List.copyOf(parameters), block(), name);
+		GscAst.Block body = block();
+		defaults.addAll(body.statements());
+		return new GscAst.Function(name.text().toLowerCase(), List.copyOf(parameters),
+			new GscAst.Block(List.copyOf(defaults), body.token()), name);
 	}
 
 	private GscAst.Block block()
@@ -59,6 +74,10 @@ final class GscParser
 
 	private GscAst.Statement statement()
 	{
+		if (match(";"))
+		{
+			return new GscAst.Block(List.of(), previous());
+		}
 		if (check("{"))
 		{
 			return block();
@@ -86,8 +105,25 @@ final class GscParser
 		if (match("break"))
 		{
 			GscToken token = previous();
+			int depth = 1;
+			if (!check(";"))
+			{
+				GscToken count = require(GscToken.Type.NUMBER, "Expected a positive break depth");
+				try
+				{
+					depth = Integer.decode(count.text());
+				}
+				catch (NumberFormatException failure)
+				{
+					throw error(count, "Expected a positive break depth");
+				}
+				if (depth < 1)
+				{
+					throw error(count, "Expected a positive break depth");
+				}
+			}
 			require(";");
-			return new GscAst.BreakStatement(token);
+			return new GscAst.BreakStatement(depth, token);
 		}
 		if (match("continue"))
 		{
@@ -213,7 +249,7 @@ final class GscParser
 	private GscAst.Expression assignment()
 	{
 		GscAst.Expression left = conditional();
-		if (match("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="))
+		if (match("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="))
 		{
 			GscToken operator = previous();
 			return new GscAst.Assignment(left, operator.text(), assignment(), operator);

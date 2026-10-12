@@ -648,7 +648,7 @@ final class GscEditorDialog extends JDialog
 		boolean single = selected != null && Files.isRegularFile(selected) && !Files.isRegularFile(root.resolve("config.il"));
 		for (SourceFile file : files.values())
 		{
-			if (!compiling || (single ? file.path.equals(selected) : file.path.getParent().equals(root)))
+			if (!compiling || !single || file.path.equals(selected))
 			{
 				sources.put(name(file.path), file.source());
 			}

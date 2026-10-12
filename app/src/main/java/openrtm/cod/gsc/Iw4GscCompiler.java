@@ -30,8 +30,6 @@ public final class Iw4GscCompiler
 	private final List<CallFixup> calls = new ArrayList<>();
 	private final Map<Integer, Label> callTrampolines = new LinkedHashMap<>();
 	private final Map<String, Integer> customTokens = new LinkedHashMap<>();
-	private final Map<String, Integer> farCalls = loadCalls("/openrtm/cod/iw4-far-calls.tsv");
-	private final Map<String, Integer> stockCalls = loadCalls("/openrtm/cod/iw4-stock-calls.tsv");
 	private final List<Iw4GscProgram.StringReference> strings = new ArrayList<>();
 	private final List<Iw4GscProgram.ExportReference> exportReferences = new ArrayList<>();
 	private BiConsumer<Integer, String> progress = (percent, message) -> {};
@@ -250,7 +248,12 @@ public final class Iw4GscCompiler
 			{
 				throw error(breaking.token(), "break is only valid in a loop or switch");
 			}
-			emitJump(0x54, breaks.peek(), 4, false);
+			if (breaking.depth() > breaks.size())
+			{
+				throw error(breaking.token(), "break depth exceeds the enclosing loops and switches");
+			}
+			Label target = breaks.stream().skip(breaking.depth() - 1).findFirst().orElseThrow();
+			emitJump(0x54, target, 4, false);
 		}
 		else if (statement instanceof GscAst.ContinueStatement continuing)
 		{
@@ -666,6 +669,8 @@ public final class Iw4GscCompiler
 			case "|=" -> 0x3C;
 			case "^=" -> 0x3E;
 			case "&=" -> 0x3F;
+			case "<<=" -> 0x51;
+			case ">>=" -> 0x52;
 			default -> throw error(assignment.token(), "Unsupported assignment operator");
 		};
 		emit(opcode);
@@ -760,7 +765,7 @@ public final class Iw4GscCompiler
 		if (!call.path().isEmpty())
 		{
 			String target = normalize(call.path()) + "::" + name;
-			Integer operand = farCalls.get(target);
+			Integer operand = Iw4GscTables.farCall(target);
 			if (operand == null)
 			{
 				throw error(call.token(), "Unknown stock script function '" + target + "'");
@@ -769,7 +774,7 @@ public final class Iw4GscCompiler
 			emitScriptCall(call, null, operand);
 			return;
 		}
-		Integer stock = stockCalls.get(name);
+		Integer stock = Iw4GscTables.stockCall(name);
 		if (stock != null)
 		{
 			emitScriptCallArguments(call);
@@ -883,6 +888,12 @@ public final class Iw4GscCompiler
 			Label target = functions.get(name);
 			if (target == null)
 			{
+				Integer stock = Iw4GscTables.stockCall(name);
+				if (stock != null)
+				{
+					output.write24(relocateCall(stock, instruction));
+					return;
+				}
 				throw error(reference.token(), "Unknown function '" + reference.name() + "'");
 			}
 			output.write24(0);
@@ -890,7 +901,7 @@ public final class Iw4GscCompiler
 			return;
 		}
 		String target = normalize(reference.path()) + "::" + name;
-		Integer fixed = farCalls.get(target);
+		Integer fixed = Iw4GscTables.farCall(target);
 		if (fixed == null)
 		{
 			throw error(reference.token(), "Unknown stock script function '" + target + "'");
@@ -1390,32 +1401,6 @@ public final class Iw4GscCompiler
 		return declared;
 	}
 
-	private static Map<String, Integer> loadCalls(String resource)
-	{
-		InputStream input = Iw4GscCompiler.class.getResourceAsStream(resource);
-		if (input == null)
-		{
-			throw new ExceptionInInitializerError("Missing GSC call table " + resource);
-		}
-		Map<String, Integer> values = new HashMap<>();
-		try
-		{
-			for (String line : new String(input.readAllBytes(), StandardCharsets.US_ASCII).split("\\R"))
-			{
-				if (!line.isBlank())
-				{
-					String[] parts = line.split("\\t", 2);
-					values.put(normalize(parts[1]), Integer.parseUnsignedInt(parts[0], 16));
-				}
-			}
-		}
-		catch (IOException failure)
-		{
-			throw new ExceptionInInitializerError(failure);
-		}
-		return Map.copyOf(values);
-	}
-
 	private static List<GscAst.Function> standardFunctions()
 	{
 		InputStream input = Iw4GscCompiler.class.getResourceAsStream(STANDARD_LIBRARY);
@@ -1438,7 +1423,7 @@ public final class Iw4GscCompiler
 	{
 		if (canonical == 0xF1F1F1)
 		{
-			return canonical;
+			throw new IllegalArgumentException("The stock script function has not been mapped");
 		}
 		int originalAddress = CODE_ADDRESS + 2;
 		int target = originalAddress + (((canonical << 8) + originalAddress) >> 12);

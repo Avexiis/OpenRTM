@@ -13,7 +13,7 @@ Open **COD Options > MW2 > Inject GSC**, select source, and click **Open Editor*
 
 The file list opens source tabs. Closing a changed tab, switching projects, or closing the editor prompts about unsaved work. If a file has changed outside OpenRTM, saving offers **Overwrite**, **Reload**, or **Cancel**; reloading discards the editor's unsaved changes for that file.
 
-Keep the source needed for editor compilation directly in the project folder. Nested files can appear in the editor and syntax checks, but editor compilation/export currently uses the top-level files. Compilation from the [GSC Menus page](gsc-menus.md) includes the selected folder's GSC files recursively.
+Project checks and exports include GSC files in subfolders, just like compilation from the [GSC Menus page](gsc-menus.md). Opening a standalone file without a project configuration checks and compiles that file only.
 
 Adding a file to an opened standalone script changes the selection to its folder as a project. Avoid keeping unrelated menus together.
 

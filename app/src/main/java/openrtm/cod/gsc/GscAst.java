@@ -55,7 +55,7 @@ final class GscAst
 	{
 	}
 
-	record BreakStatement(GscToken token) implements Statement
+	record BreakStatement(int depth, GscToken token) implements Statement
 	{
 	}
 

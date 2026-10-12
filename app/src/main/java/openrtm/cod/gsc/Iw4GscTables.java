@@ -16,11 +16,15 @@ final class Iw4GscTables
 	private static final Map<String, Integer> FUNCTIONS = new LinkedHashMap<>();
 	private static final Map<String, Integer> METHODS = new LinkedHashMap<>();
 	private static final Map<String, Integer> TOKENS = new LinkedHashMap<>();
+	private static final Map<String, Integer> STOCK_CALLS = new LinkedHashMap<>();
+	private static final Map<String, Integer> FAR_CALLS = new LinkedHashMap<>();
 
 	static
 	{
 		loadBuiltins();
 		loadTokens();
+		loadCalls("/openrtm/cod/iw4-stock-calls.tsv", STOCK_CALLS);
+		loadCalls("/openrtm/cod/iw4-far-calls.tsv", FAR_CALLS);
 	}
 
 	static int function(String name)
@@ -42,7 +46,31 @@ final class Iw4GscTables
 	{
 		Set<String> names = new LinkedHashSet<>(FUNCTIONS.keySet());
 		names.addAll(METHODS.keySet());
+		names.addAll(STOCK_CALLS.keySet());
+		names.addAll(FAR_CALLS.keySet());
+		names.addAll(Set.of("ReadByte", "WriteByte", "ReadString", "WriteString", "RPC"));
 		return Set.copyOf(names);
+	}
+
+	static Integer stockCall(String name)
+	{
+		return STOCK_CALLS.get(normalize(name));
+	}
+
+	static Integer farCall(String name)
+	{
+		return FAR_CALLS.get(normalize(name));
+	}
+
+	private static void loadCalls(String resource, Map<String, Integer> target)
+	{
+		read(resource, values -> {
+			int operand = Integer.parseUnsignedInt(values[0], 16);
+			if (operand != 0xF1F1F1)
+			{
+				target.put(normalize(values[1]), operand);
+			}
+		});
 	}
 
 	private static void loadBuiltins()

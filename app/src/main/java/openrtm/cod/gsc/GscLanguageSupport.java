@@ -256,6 +256,10 @@ public final class GscLanguageSupport
 					index++;
 				}
 			}
+			else if (source.startsWith("<<=", start) || source.startsWith(">>=", start))
+			{
+				index += 2;
+			}
 			else if (index < source.length() && Set.of("::", "++", "--", "+=", "-=", "*=", "/=", "%=", "==", "!=",
 				"<=", ">=", "&&", "||", "<<", ">>", "&=", "|=", "^=").contains(source.substring(start, index + 1)))
 			{

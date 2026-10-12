@@ -6,7 +6,7 @@ import java.util.List;
 final class GscLexer
 {
 	private static final List<String> OPERATORS = List.of(
-		"[[", "::", "++", "--", "+=", "-=", "*=", "/=", "%=", "==", "!=", "<=", ">=",
+		"<<=", ">>=", "[[", "::", "++", "--", "+=", "-=", "*=", "/=", "%=", "==", "!=", "<=", ">=",
 		"&&", "||", "<<", ">>", "&=", "|=", "^=");
 	private final String source;
 	private final String file;
