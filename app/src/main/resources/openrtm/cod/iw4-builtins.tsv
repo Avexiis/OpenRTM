@@ -677,6 +677,7 @@ f	0x0114	getmapcustomfield
 m	0x0122	hidepartallinstances
 m	0x0157	setsentrycarried
 m	0x0186	entityradiusdamage
+m	0x0186	radiusdamage
 m	0x01AA	buttonpresseddevonly
 m	0x01C7	registerweaponforfxremoval
 m	0x01D1	getviewheight

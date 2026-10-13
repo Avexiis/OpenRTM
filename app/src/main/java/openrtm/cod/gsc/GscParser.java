@@ -1,17 +1,34 @@
 package openrtm.cod.gsc;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 final class GscParser
 {
 	private final List<GscToken> tokens;
+	private final Map<String, List<GscToken>> definitions;
+	private final Set<String> expanding;
 	private int index;
 
 	GscParser(List<GscToken> tokens)
 	{
+		this(tokens, Map.of());
+	}
+
+	GscParser(List<GscToken> tokens, Map<String, List<GscToken>> definitions)
+	{
+		this(tokens, definitions, new HashSet<>());
+	}
+
+	private GscParser(List<GscToken> tokens, Map<String, List<GscToken>> definitions, Set<String> expanding)
+	{
 		this.tokens = tokens;
+		this.definitions = definitions;
+		this.expanding = expanding;
 	}
 
 	GscAst.Program parse()
@@ -484,7 +501,40 @@ final class GscParser
 		{
 			return qualifiedReference(name);
 		}
+		String key = name.text().toLowerCase(Locale.ROOT);
+		if (definitions.containsKey(key) && !check("("))
+		{
+			return definition(name, key);
+		}
 		return new GscAst.Name(name.text(), name);
+	}
+
+	private GscAst.Expression definition(GscToken name, String key)
+	{
+		if (expanding.size() >= 64 || !expanding.add(key))
+		{
+			throw error(name, "Recursive or excessively nested definition '" + name.text() + "'");
+		}
+		try
+		{
+			List<GscToken> value = new ArrayList<>();
+			for (GscToken token : definitions.get(key))
+			{
+				value.add(new GscToken(token.type(), token.text(), name.file(), name.line(), name.column()));
+			}
+			value.add(new GscToken(GscToken.Type.END, "", name.file(), name.line(), name.column()));
+			GscParser parser = new GscParser(value, definitions, expanding);
+			GscAst.Expression expression = parser.expression();
+			if (!parser.end())
+			{
+				throw error(name, "Invalid value for definition '" + name.text() + "'");
+			}
+			return expression;
+		}
+		finally
+		{
+			expanding.remove(key);
+		}
 	}
 
 	private GscAst.Expression qualifiedReference(GscToken first)

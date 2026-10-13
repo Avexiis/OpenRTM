@@ -72,7 +72,7 @@ public final class Iw4GscCompiler
 				throw new IllegalArgumentException("Unable to read " + file.getFileName(), failure);
 			}
 		}
-		return compile(sources, progress);
+		return compile(sources, root, progress);
 	}
 
 	public static Iw4GscProgram compile(Map<String, String> sources)
@@ -82,13 +82,24 @@ public final class Iw4GscCompiler
 
 	public static Iw4GscProgram compile(Map<String, String> sources, BiConsumer<Integer, String> progress)
 	{
+		return compile(sources, Set.of(), progress);
+	}
+
+	public static Iw4GscProgram compile(Map<String, String> sources, Path project, BiConsumer<Integer, String> progress)
+	{
+		return compile(sources, GscProjectSymbols.read(project), progress);
+	}
+
+	private static Iw4GscProgram compile(Map<String, String> sources, Set<String> symbols, BiConsumer<Integer, String> progress)
+	{
 		List<GscAst.Function> functions = new ArrayList<>();
 		Map<String, List<String>> includes = new LinkedHashMap<>();
+		GscPreprocessor.Result preprocessed = GscPreprocessor.process(sources, symbols);
 		int parsed = 0;
 		for (Map.Entry<String, String> source : sources.entrySet())
 		{
 			progress.accept(5 + parsed++ * 30 / Math.max(1, sources.size()), "Checking " + source.getKey());
-			GscAst.Program program = new GscParser(new GscLexer(source.getValue(), source.getKey()).lex()).parse();
+			GscAst.Program program = new GscParser(preprocessed.sources().get(source.getKey()), preprocessed.definitions()).parse();
 			functions.addAll(program.functions());
 			includes.put(source.getKey(), program.includes());
 		}

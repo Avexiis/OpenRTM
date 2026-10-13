@@ -567,21 +567,17 @@ final class GscEditorDialog extends JDialog
 			@Override
 			protected CheckResult doInBackground()
 			{
-				List<Diagnostic> issues = new ArrayList<>();
-				for (Map.Entry<String, String> source : all.entrySet())
+				if (isCancelled())
 				{
-					if (isCancelled())
-					{
-						return null;
-					}
-					issues.addAll(GscLanguageSupport.syntax(source.getKey(), source.getValue()));
+					return null;
 				}
+				List<Diagnostic> issues = new ArrayList<>(GscLanguageSupport.syntax(all, root));
 				int length = 0;
 				if (issues.isEmpty())
 				{
 					try
 					{
-						var program = Iw4GscCompiler.compile(compiling);
+						var program = Iw4GscCompiler.compile(compiling, root, (percent, message) -> {});
 						program.gscbin();
 						length = program.size();
 					}
@@ -1022,7 +1018,7 @@ final class GscEditorDialog extends JDialog
 			@Override
 			protected Void doInBackground() throws Exception
 			{
-				byte[] binary = Iw4GscCompiler.compile(sources, (percent, message) -> progress.update(percent * 95L / 100, 100, message)).gscbin();
+				byte[] binary = Iw4GscCompiler.compile(sources, root, (percent, message) -> progress.update(percent * 95L / 100, 100, message)).gscbin();
 				progress.update(98, 100, "Saving compiled file");
 				writeAtomic(destination, binary);
 				return null;

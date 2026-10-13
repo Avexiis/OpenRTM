@@ -480,3 +480,6 @@
 3860bb	maps\mp\_load::main
 193f0b	common_scripts\utility::error
 4f458b	maps\mp\gametypes\_spectating::getotherteam
+32cd0b	maps\mp\gametypes\_spawnlogic::getspawnpoint_nearteam
+24b17b	maps\mp\_entityheadicons::setheadicon
+62393b	maps\mp\killstreaks\_airdrop::doflyby

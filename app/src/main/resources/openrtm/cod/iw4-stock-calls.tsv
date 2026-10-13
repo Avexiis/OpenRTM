@@ -433,3 +433,6 @@
 4f29cb	addtoteamcount
 4f2acb	removefromteamcount
 193f0b	error
+32cd0b	getspawnpoint_nearteam
+24b17b	setheadicon
+62393b	doflyby

@@ -1,10 +1,11 @@
 package openrtm.cod.gsc;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.LinkedHashSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,15 +37,33 @@ public final class GscLanguageSupport
 
 	public static List<Diagnostic> syntax(String file, String source)
 	{
+		return syntax(Map.of(file, source), null);
+	}
+
+	public static List<Diagnostic> syntax(Map<String, String> sources, Path project)
+	{
+		List<Diagnostic> issues = new ArrayList<>();
+		String fallback = sources.keySet().stream().findFirst().orElse("main.gsc");
 		try
 		{
-			new GscParser(new GscLexer(source, file).lex()).parse();
-			return List.of();
+			GscPreprocessor.Result preprocessed = GscPreprocessor.process(sources, GscProjectSymbols.read(project));
+			for (Map.Entry<String, List<GscToken>> source : preprocessed.sources().entrySet())
+			{
+				try
+				{
+					new GscParser(source.getValue(), preprocessed.definitions()).parse();
+				}
+				catch (IllegalArgumentException failure)
+				{
+					issues.add(diagnostic(source.getKey(), failure));
+				}
+			}
 		}
 		catch (IllegalArgumentException failure)
 		{
-			return List.of(diagnostic(file, failure));
+			issues.add(diagnostic(fallback, failure));
 		}
+		return List.copyOf(issues);
 	}
 
 	public static Set<String> completions(Map<String, String> sources)
