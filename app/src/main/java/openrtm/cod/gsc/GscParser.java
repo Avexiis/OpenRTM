@@ -2,6 +2,7 @@ package openrtm.cod.gsc;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 final class GscParser
 {
@@ -16,16 +17,21 @@ final class GscParser
 	GscAst.Program parse()
 	{
 		List<GscAst.Function> functions = new ArrayList<>();
+		List<String> includes = new ArrayList<>();
 		while (!end())
 		{
 			if (match("#"))
 			{
-				skipDirective();
+				String include = directive();
+				if (include != null)
+				{
+					includes.add(include);
+				}
 				continue;
 			}
 			functions.add(function());
 		}
-		return new GscAst.Program(List.copyOf(functions));
+		return new GscAst.Program(List.copyOf(functions), List.copyOf(includes));
 	}
 
 	private GscAst.Function function()
@@ -81,6 +87,19 @@ final class GscParser
 		if (check("{"))
 		{
 			return block();
+		}
+		if (match("breakpoint"))
+		{
+			GscToken token = previous();
+			require(";");
+			return new GscAst.Block(List.of(), token);
+		}
+		if (match("assert", "assertex", "assertmsg", "prof_begin", "prof_end"))
+		{
+			GscToken token = previous();
+			arguments();
+			require(";");
+			return new GscAst.Block(List.of(), token);
 		}
 		if (match("if"))
 		{
@@ -563,12 +582,31 @@ final class GscParser
 		return position < tokens.size() && tokens.get(position).is("(");
 	}
 
-	private void skipDirective()
+	private String directive()
 	{
-		while (!end() && !match(";"))
+		boolean include = match("include");
+		boolean identifier = true;
+		boolean valid = include;
+		StringBuilder path = new StringBuilder();
+		while (!end() && !check(";"))
 		{
-			advance();
+			GscToken token = advance();
+			if (identifier && token.type() == GscToken.Type.IDENTIFIER)
+			{
+				path.append(token.text().toLowerCase(Locale.ROOT));
+			}
+			else if (!identifier && (token.is("\\") || token.is("/")))
+			{
+				path.append('\\');
+			}
+			else
+			{
+				valid = false;
+			}
+			identifier = !identifier;
 		}
+		match(";");
+		return valid && !identifier ? path.toString() : null;
 	}
 
 	private boolean match(String... values)

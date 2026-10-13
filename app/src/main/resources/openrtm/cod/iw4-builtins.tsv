@@ -713,3 +713,5 @@ m	0x02D8	isusingonlinedataprofile
 m	0x02DA	getrandomloot
 m	0x02DB	createlootmail
 m	0x02E0	ismantling_
+f	0x00CE	precacheleaderboards
+f	0x005F	precacherumble

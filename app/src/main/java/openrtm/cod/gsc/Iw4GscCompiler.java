@@ -27,6 +27,7 @@ public final class Iw4GscCompiler
 	private static final String STANDARD_LIBRARY = "/openrtm/cod/iw4-standard-library.gsc";
 	private final Writer output = new Writer();
 	private final Map<String, Label> functions = new LinkedHashMap<>();
+	private final Map<String, List<String>> includes = new LinkedHashMap<>();
 	private final List<CallFixup> calls = new ArrayList<>();
 	private final Map<Integer, Label> callTrampolines = new LinkedHashMap<>();
 	private final Map<String, Integer> customTokens = new LinkedHashMap<>();
@@ -82,11 +83,14 @@ public final class Iw4GscCompiler
 	public static Iw4GscProgram compile(Map<String, String> sources, BiConsumer<Integer, String> progress)
 	{
 		List<GscAst.Function> functions = new ArrayList<>();
+		Map<String, List<String>> includes = new LinkedHashMap<>();
 		int parsed = 0;
 		for (Map.Entry<String, String> source : sources.entrySet())
 		{
 			progress.accept(5 + parsed++ * 30 / Math.max(1, sources.size()), "Checking " + source.getKey());
-			functions.addAll(new GscParser(new GscLexer(source.getValue(), source.getKey()).lex()).parse().functions());
+			GscAst.Program program = new GscParser(new GscLexer(source.getValue(), source.getKey()).lex()).parse();
+			functions.addAll(program.functions());
+			includes.put(source.getKey(), program.includes());
 		}
 		Set<String> sourceNames = functions.stream()
 			.map(function -> normalize(function.name()))
@@ -99,6 +103,7 @@ public final class Iw4GscCompiler
 			}
 		}
 		Iw4GscCompiler compiler = new Iw4GscCompiler();
+		compiler.includes.putAll(includes);
 		compiler.progress = progress;
 		return compiler.compileFunctions(functions);
 	}
@@ -774,7 +779,7 @@ public final class Iw4GscCompiler
 			emitScriptCall(call, null, operand);
 			return;
 		}
-		Integer stock = Iw4GscTables.stockCall(name);
+		Integer stock = stockCall(name, call.token());
 		if (stock != null)
 		{
 			emitScriptCallArguments(call);
@@ -888,7 +893,7 @@ public final class Iw4GscCompiler
 			Label target = functions.get(name);
 			if (target == null)
 			{
-				Integer stock = Iw4GscTables.stockCall(name);
+				Integer stock = stockCall(name, reference.token());
 				if (stock != null)
 				{
 					output.write24(relocateCall(stock, instruction));
@@ -907,6 +912,29 @@ public final class Iw4GscCompiler
 			throw error(reference.token(), "Unknown stock script function '" + target + "'");
 		}
 		output.write24(relocateCall(fixed, instruction));
+	}
+
+	private Integer stockCall(String name, GscToken token)
+	{
+		Integer stock = Iw4GscTables.stockCall(name);
+		if (stock != null)
+		{
+			return stock;
+		}
+		Set<Integer> targets = new LinkedHashSet<>();
+		for (String path : includes.getOrDefault(token.file(), List.of()))
+		{
+			Integer target = Iw4GscTables.farCall(path + "::" + name);
+			if (target != null)
+			{
+				targets.add(target);
+			}
+		}
+		if (targets.size() > 1)
+		{
+			throw error(token, "Function '" + name + "' is available in more than one included script");
+		}
+		return targets.stream().findFirst().orElse(null);
 	}
 
 	private boolean compileEvent(GscAst.Expression expression)

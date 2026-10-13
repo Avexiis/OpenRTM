@@ -49,6 +49,7 @@ final class Iw4GscTables
 		names.addAll(STOCK_CALLS.keySet());
 		names.addAll(FAR_CALLS.keySet());
 		names.addAll(Set.of("ReadByte", "WriteByte", "ReadString", "WriteString", "RPC"));
+		names.addAll(Set.of("assert", "assertEx", "assertMsg", "prof_begin", "prof_end"));
 		return Set.copyOf(names);
 	}
 

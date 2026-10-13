@@ -5,7 +5,7 @@ import java.util.function.Consumer;
 
 final class GscAst
 {
-	record Program(List<Function> functions)
+	record Program(List<Function> functions, List<String> includes)
 	{
 	}
 
